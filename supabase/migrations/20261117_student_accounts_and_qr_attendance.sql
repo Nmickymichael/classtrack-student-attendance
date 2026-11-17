@@ -153,7 +153,12 @@ grant execute on function public.student_register(uuid, text, text, text) to aut
 
 -- Students can mark themselves present only for an active, unexpired session
 -- belonging to a class in which their authenticated account is enrolled.
-create or replace function public.student_check_in(p_session_token uuid)
+drop function if exists public.student_check_in(uuid);
+
+create or replace function public.student_check_in(
+  p_session_token uuid,
+  p_admission_number text
+)
 returns jsonb
 language plpgsql
 security definer
@@ -163,9 +168,13 @@ declare
   v_user_id uuid := auth.uid();
   v_session public.attendance_sessions%rowtype;
   v_student public.students%rowtype;
+  v_admission_number text := lower(trim(coalesce(p_admission_number, '')));
 begin
   if v_user_id is null then
     raise exception 'Please sign in to your student account first.';
+  end if;
+  if v_admission_number = '' then
+    raise exception 'Enter your admission number to verify your identity for this lecture.';
   end if;
 
   select * into v_session
@@ -183,6 +192,7 @@ begin
   from public.students s
   where s.class_id = v_session.class_id
     and s.user_id = v_user_id
+    and lower(trim(s.admission_number)) = v_admission_number
   limit 1;
 
   if v_student.id is null then
@@ -208,8 +218,8 @@ begin
 end;
 $$;
 
-revoke all on function public.student_check_in(uuid) from public, anon;
-grant execute on function public.student_check_in(uuid) to authenticated;
+revoke all on function public.student_check_in(uuid, text) from public, anon;
+grant execute on function public.student_check_in(uuid, text) to authenticated;
 
 grant select, insert, update on public.attendance_sessions to authenticated;
 grant select on public.students to authenticated;
