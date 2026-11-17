@@ -360,12 +360,15 @@ function recordLecturerTeachingSignIn(classId, topic = "", silent = false) {
     l => l.classId === classId && l.date === dateStr
   );
 
-  if (existingToday && silent) return;
+  if (existingToday && silent && existingToday.status === "Signed In · Teaching") return;
 
   if (existingToday) {
     existingToday.time = timeStr;
     if (topic) existingToday.topic = topic;
     existingToday.timestamp = new Date().toISOString();
+    existingToday.status = "Signed In · Teaching";
+    delete existingToday.endTime;
+    delete existingToday.endedAt;
   } else {
     data.teachingLogs.push({
       id: makeId(),
