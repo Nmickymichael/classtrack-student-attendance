@@ -2065,6 +2065,28 @@ async function handleStudentSelfCheckIn(event) {
    ATTENDANCE REGISTER & BULK ACTIONS
    ========================================= */
 
+function updateRegisterProgress() {
+  const rows = [...($("registerArea")?.querySelectorAll("[data-register-row]") || [])];
+  if (!rows.length) return;
+
+  const classId = $("attendanceClass").value;
+  const date = $("attendanceDate").value;
+  const savedIds = new Set(
+    data.attendance
+      .filter(record => record.classId === classId && record.date === date)
+      .map(record => record.studentId)
+  );
+  const selectedCount = rows.filter(row =>
+    Boolean(row.querySelector(".status-option.selected"))
+  ).length;
+  const savedCount = rows.filter(row => savedIds.has(row.dataset.registerRow)).length;
+  const unmarkedCount = rows.length - selectedCount;
+  const progress = $("registerProgress");
+  if (progress) {
+    progress.textContent = `${savedCount} of ${rows.length} records saved · ${unmarkedCount} unmarked`;
+  }
+}
+
 function renderRegister() {
   const classId = $("attendanceClass").value;
   const date = $("attendanceDate").value;
@@ -2109,8 +2131,8 @@ function renderRegister() {
 
     ${students.map(student => {
       const record = existingMap.get(student.id);
-      const currentStatus = record?.status || "Present";
-      const initials = student.name.split(/\s+/).map(p => p[0]).slice(0, 2).join("").toUpperCase();
+      const currentStatus = record?.status || "";
+      const initials = student.name.split(/\\s+/).map(p => p[0]).slice(0, 2).join("").toUpperCase();
 
       return `
         <div class="register-row" data-register-row="${escapeHTML(student.id)}">
@@ -2136,7 +2158,7 @@ function renderRegister() {
     }).join("")}
 
     <div class="register-footer">
-      <small id="registerProgress">${existingRecords.length} of ${students.length} records already saved</small>
+      <small id="registerProgress"></small>
       <button class="btn btn-primary" id="saveRegisterBtn">Save attendance register</button>
     </div>
   `;
@@ -2146,12 +2168,14 @@ function renderRegister() {
       const row = button.closest(".register-row");
       row.querySelectorAll(".status-option").forEach(item => item.classList.remove("selected"));
       button.classList.add("selected");
+      updateRegisterProgress();
     });
   });
 
   $("markAllPresentBtn").addEventListener("click", () => setBulkStatus("Present"));
   $("markAllAbsentBtn").addEventListener("click", () => setBulkStatus("Absent"));
   $("saveRegisterBtn").addEventListener("click", saveRegister);
+  updateRegisterProgress();
 }
 
 function setBulkStatus(targetStatus) {
@@ -2160,6 +2184,7 @@ function setBulkStatus(targetStatus) {
       btn.classList.toggle("selected", btn.dataset.status === targetStatus);
     });
   });
+  updateRegisterProgress();
   toast(`All students marked ${targetStatus}. Click Save to confirm.`);
 }
 
@@ -2177,11 +2202,21 @@ async function saveRegister() {
     return;
   }
 
+  const selectedRows = rows.filter(row =>
+    Boolean(row.querySelector(".status-option.selected"))
+  );
+  const unmarkedCount = rows.length - selectedRows.length;
+
+  if (!selectedRows.length) {
+    toast("No attendance statuses selected. Mark at least one student before saving.");
+    return;
+  }
+
   const targetClass = data.classes.find(c => c.id === classId);
   const ownerStaffId = targetClass?._ownerStaffId || currentLecturer?.staffId || "admin";
-  const pendingRecords = rows.map(row => {
+  const pendingRecords = selectedRows.map(row => {
     const studentId = row.dataset.registerRow;
-    const status = row.querySelector(".status-option.selected")?.dataset.status || "Present";
+    const status = row.querySelector(".status-option.selected").dataset.status;
     const remarks = row.querySelector("[data-remarks]")?.value.trim() || "";
     const existing = data.attendance.find(
       record => record.studentId === studentId && record.classId === classId && record.date === date
@@ -2197,21 +2232,24 @@ async function saveRegister() {
   if (saveButton) { saveButton.disabled = true; saveButton.textContent = "Saving to cloud..."; }
   try {
     const cloudRecords = await saveAttendanceBatchToCloud(pendingRecords);
-    recordLecturerTeachingSignIn(classId, "Class Register Recorded", true);
     cloudRecords.forEach(cloudRecord => {
       const index = data.attendance.findIndex(record => record.id === cloudRecord.id);
       if (index >= 0) data.attendance[index] = cloudRecord;
       else data.attendance.push(cloudRecord);
     });
     saveData();
-    toast("Attendance register saved and synced to Supabase.");
+    if (unmarkedCount > 0) {
+      toast(`${cloudRecords.length} attendance record(s) saved. ${unmarkedCount} student(s) remain unmarked and were not saved.`);
+    } else {
+      toast("Attendance register saved and synced to Supabase.");
+    }
     renderRegister();
     renderDashboard();
   } catch (error) {
     console.error("Supabase attendance save failed:", error);
     toast("Attendance was not saved to the cloud: " + (error.message || "Check Supabase RLS policies."));
   } finally {
-    if (saveButton) { saveButton.disabled = false; saveButton.textContent = "Save Attendance"; }
+    if (saveButton) { saveButton.disabled = false; saveButton.textContent = "Save attendance register"; }
   }
 }
 
