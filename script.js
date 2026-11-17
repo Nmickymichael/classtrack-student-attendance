@@ -594,184 +594,166 @@ function checkUrlPortalMode() {
 }
 
 /* =========================================
-   AUTHENTICATION, SIGN UP & CREDENTIAL RECOVERY
+   SUPABASE AUTHENTICATION
    ========================================= */
 
-function setupAuthUIEnhancements() {
-  // Remove "(Default: 1234)" hint from login screen for security
-  const loginLabels = $("loginForm").querySelectorAll("small");
-  loginLabels.forEach(el => {
-    if (el.textContent.includes("1234")) {
-      el.textContent = "Enter your personal PIN / Password";
+// Convert Supabase user into the format
+// already used by the ClassTrack interface.
+function authUserToLecturer(user) {
+  const metadata = user.user_metadata || {};
+
+  return {
+    id: user.id,
+    name: metadata.full_name || user.email,
+    staffId: user.email,
+    department: metadata.department || "Computing & Informatics Department",
+    email: user.email
+  };
+}
+
+// Restore an existing Supabase login session.
+async function checkAuth() {
+  try {
+    const { data: { session }, error } =
+      await supabaseClient.auth.getSession();
+
+    if (error) throw error;
+
+    if (session?.user) {
+      unlockApp(authUserToLecturer(session.user));
+    } else {
+      $("loginScreen").style.display = "grid";
+      $("appShell").style.display = "none";
     }
-  });
-
-  // Inject "Forgot Staff ID or PIN?" recovery trigger & panel on the login card
-  if (!$("forgotCredsTrigger")) {
-    const footerLink = $("showSignUpBtn")?.closest("p") || $("loginForm").lastElementChild;
-    const recoveryTrigger = document.createElement("p");
-    recoveryTrigger.id = "forgotCredsTrigger";
-    recoveryTrigger.style.cssText = "text-align:center;font-size:12px;color:#5f6f8a;margin-top:8px;";
-    recoveryTrigger.innerHTML = `Forgot Staff ID or PIN? <button type="button" id="openRecoveryBtn" style="background:none;border:none;color:#2f6fed;font-weight:600;cursor:pointer;text-decoration:underline;padding:0;">Get Assistance / Reset</button>`;
-    footerLink.parentNode.insertBefore(recoveryTrigger, footerLink.nextSibling);
-
-    const recoveryBox = document.createElement("form");
-    recoveryBox.id = "recoveryForm";
-    recoveryBox.style.cssText = "display:none;gap:10px;margin-top:10px;";
-    recoveryBox.innerHTML = `
-      <div style="background:#f3f6fc;border:1px solid #d8e2f3;border-radius:8px;padding:10px;font-size:12px;color:#293852;line-height:1.45;">
-        <strong>Lecturer Credential Assistance:</strong><br>
-        1. Contact the <strong>System Administrator</strong> to reset your PIN instantly from the Admin Dashboard, <em>or</em><br>
-        2. Verify your registered <strong>Staff ID</strong> and <strong>Full Name</strong> below to set a new PIN.
-      </div>
-      <label class="field" style="display:grid;gap:4px;font-size:12px;font-weight:600;">
-        <span>Registered Staff ID / Email</span>
-        <input id="recStaffId" required placeholder="e.g. lec123">
-      </label>
-      <label class="field" style="display:grid;gap:4px;font-size:12px;font-weight:600;">
-        <span>Registered Full Name</span>
-        <input id="recFullName" required placeholder="Exact name used at sign up">
-      </label>
-      <label class="field" style="display:grid;gap:4px;font-size:12px;font-weight:600;">
-        <span>New PIN / Password (min 4 chars)</span>
-        <input id="recNewPin" type="password" required minlength="4" placeholder="Enter new PIN">
-      </label>
-      <div id="recoveryFeedback" style="font-size:12px;min-height:16px;"></div>
-      <button type="submit" class="btn btn-primary" style="width:100%;">Verify & Reset Lecturer PIN</button>
-      <button type="button" id="backToSignInBtn" class="btn btn-light" style="width:100%;">Back to Sign In</button>
-    `;
-    $("loginForm").parentNode.insertBefore(recoveryBox, $("loginForm").nextSibling);
-
-    $("openRecoveryBtn").addEventListener("click", () => toggleAuthMode("recovery"));
-    $("backToSignInBtn").addEventListener("click", () => toggleAuthMode("signin"));
-    recoveryBox.addEventListener("submit", handleSelfServiceRecovery);
-  }
-}
-
-function handleSelfServiceRecovery(event) {
-  event.preventDefault();
-  const staffId = $("recStaffId").value.trim().toLowerCase();
-  const fullName = $("recFullName").value.trim().toLowerCase();
-  const newPin = $("recNewPin").value.trim();
-  const fb = $("recoveryFeedback");
-
-  if (staffId === "admin") {
-    fb.style.color = "#c93b44";
-    fb.textContent = "Admin password cannot be reset here. Only the System Administrator can change it inside Settings.";
-    return;
-  }
-
-  const lecturers = getLecturers();
-  const matched = lecturers.find(
-    l => l.staffId.toLowerCase() === staffId && l.name.trim().toLowerCase() === fullName
-  );
-
-  if (!matched) {
-    fb.style.color = "#c93b44";
-    fb.textContent = "Staff ID and Full Name did not match our records. Please ask the System Administrator to reset your PIN.";
-    return;
-  }
-
-  matched.pin = newPin;
-  saveLecturers(lecturers);
-
-  const ws = readRawWorkspaceByStaffId(matched.staffId);
-  ws.settings = { ...(ws.settings || {}), pin: newPin };
-  localStorage.setItem(getWorkspaceKey(matched.staffId), JSON.stringify(ws));
-
-  $("recoveryForm").reset();
-  toggleAuthMode("signin");
-  $("loginStaffId").value = matched.staffId;
-  toast(`✓ PIN updated for ${matched.name}. Sign in with your new PIN.`);
-}
-
-function checkAuth() {
-  const activeUserRaw = sessionStorage.getItem(SESSION_AUTH_KEY);
-  if (activeUserRaw) {
-    unlockApp(JSON.parse(activeUserRaw));
-  } else {
+  } catch (error) {
+    console.error("Authentication session error:", error);
     $("loginScreen").style.display = "grid";
     $("appShell").style.display = "none";
+    $("loginError").textContent =
+      "Could not restore your session. Please sign in again.";
   }
 }
 
 function toggleAuthMode(mode) {
   $("loginError").textContent = "";
   $("signUpError").textContent = "";
-  if ($("recoveryFeedback")) $("recoveryFeedback").textContent = "";
 
   $("loginForm").style.display = mode === "signin" ? "grid" : "none";
   $("signUpForm").style.display = mode === "signup" ? "grid" : "none";
-  if ($("recoveryForm")) $("recoveryForm").style.display = mode === "recovery" ? "grid" : "none";
-  if ($("forgotCredsTrigger")) $("forgotCredsTrigger").style.display = mode === "signin" ? "block" : "none";
 
   if (mode === "signup") {
     $("authSubtitle").textContent = "Create Private Lecturer Workspace";
-  } else if (mode === "recovery") {
-    $("authSubtitle").textContent = "Lecturer Account Recovery";
   } else {
     $("authSubtitle").textContent = "Lecturer & Administrator Sign In";
   }
 }
 
-function handleSignUp(event) {
+// Register a lecturer using Supabase Auth.
+async function handleSignUp(event) {
   event.preventDefault();
+
   const name = $("regName").value.trim();
-  const staffId = $("regStaffId").value.trim();
+  const email = $("regStaffId").value.trim().toLowerCase();
   const department = $("regDept").value.trim();
-  const pin = $("regPin").value.trim();
+  const password = $("regPin").value;
 
-  if (!name || !staffId || !department || pin.length < 4) {
-    $("signUpError").textContent = "Fill all fields and use at least a 4-character PIN.";
+  const errorBox = $("signUpError");
+  errorBox.textContent = "";
+
+  if (!name || !email || !department || password.length < 8) {
+    errorBox.textContent =
+      "Complete all fields. Password must contain at least 8 characters.";
     return;
   }
 
-  if (staffId.toLowerCase() === "admin") {
-    $("signUpError").textContent = "Staff ID 'admin' is reserved for the System Administrator.";
-    return;
+  const submitButton =
+    $("signUpForm").querySelector('button[type="submit"]');
+
+  submitButton.disabled = true;
+  submitButton.textContent = "Creating account...";
+
+  try {
+    const { data: result, error } =
+      await supabaseClient.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: name,
+            department: department
+          },
+          emailRedirectTo:
+            window.location.origin + window.location.pathname
+        }
+      });
+
+    if (error) throw error;
+
+    $("signUpForm").reset();
+
+    if (result.session && result.user) {
+      unlockApp(authUserToLecturer(result.user));
+      toast("Welcome to ClassTrack, " + name + "!");
+    } else {
+      toggleAuthMode("signin");
+      $("loginStaffId").value = email;
+
+      $("loginError").textContent =
+        "Account created! Check your email and confirm your account before signing in.";
+    }
+
+  } catch (error) {
+    console.error("Registration error:", error);
+    errorBox.textContent = error.message ||
+      "Could not create your account. Please try again.";
+
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = "Register & Enter Workspace";
   }
-
-  const lecturers = getLecturers();
-  const exists = lecturers.some(
-    lec => lec.staffId.toLowerCase() === staffId.toLowerCase()
-  );
-  if (exists) {
-    $("signUpError").textContent = "That Staff ID / Email is already registered. Sign in instead.";
-    return;
-  }
-
-  const newLecturer = { id: makeId(), name, staffId, department, pin };
-  lecturers.push(newLecturer);
-  saveLecturers(lecturers);
-
-  sessionStorage.setItem(SESSION_AUTH_KEY, JSON.stringify(newLecturer));
-  $("signUpForm").reset();
-  unlockApp(newLecturer);
-  toast(`Private workspace created for ${name}!`);
 }
 
-function handleLogin(event) {
+// Sign in an existing lecturer.
+async function handleLogin(event) {
   event.preventDefault();
-  const staffIdInput = $("loginStaffId").value.trim().toLowerCase();
-  const pin = $("loginPin").value.trim();
 
-  const lecturers = getLecturers();
-  const matched = lecturers.find(
-    lec => lec.staffId.toLowerCase() === staffIdInput && lec.pin === pin
-  );
+  const email = $("loginStaffId").value.trim().toLowerCase();
+  const password = $("loginPin").value;
 
-  if (!matched) {
-    $("loginError").textContent = "Invalid Staff ID or PIN. Click 'Get Assistance / Reset' below if you forgot your login details.";
-    return;
+  const errorBox = $("loginError");
+  errorBox.textContent = "";
+
+  const submitButton =
+    $("loginForm").querySelector('button[type="submit"]');
+
+  submitButton.disabled = true;
+  submitButton.textContent = "Signing in...";
+
+  try {
+    const { data: result, error } =
+      await supabaseClient.auth.signInWithPassword({
+        email,
+        password
+      });
+
+    if (error) throw error;
+
+    $("loginPin").value = "";
+
+    unlockApp(authUserToLecturer(result.user));
+
+    toast("Welcome back to ClassTrack!");
+
+  } catch (error) {
+    console.error("Login error:", error);
+
+    errorBox.textContent =
+      error.message || "Unable to sign in. Check your email and password.";
+
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = "Unlock Workspace";
   }
-
-  sessionStorage.setItem(SESSION_AUTH_KEY, JSON.stringify(matched));
-  $("loginError").textContent = "";
-  $("loginPin").value = "";
-  unlockApp(matched);
-  toast(isAdminUser(matched)
-    ? "Signed in as System Administrator (Global Oversight Mode)"
-    : `Welcome back, ${matched.name}`);
 }
 
 function unlockApp(user) {
@@ -796,15 +778,31 @@ function unlockApp(user) {
   showView("dashboard");
 }
 
-function lockApp() {
-  stopQrSession(true);
-  currentLecturer = null;
-  data = emptyWorkspace();
-  sessionStorage.removeItem(SESSION_AUTH_KEY);
-  $("appShell").style.display = "none";
-  $("loginScreen").style.display = "grid";
-  toggleAuthMode("signin");
-  toast("Workspace locked.");
+// Sign out of Supabase.
+async function lockApp() {
+  try {
+    const { error } = await supabaseClient.auth.signOut();
+
+    if (error) throw error;
+
+    stopQrSession(true);
+
+    currentLecturer = null;
+    data = emptyWorkspace();
+
+    sessionStorage.removeItem(SESSION_AUTH_KEY);
+
+    $("appShell").style.display = "none";
+    $("loginScreen").style.display = "grid";
+
+    toggleAuthMode("signin");
+
+    toast("Successfully signed out.");
+
+  } catch (error) {
+    console.error("Sign-out error:", error);
+    toast("Could not sign out. Please try again.");
+  }
 }
 
 /* =========================================
@@ -2119,7 +2117,6 @@ function init() {
 
   if (checkUrlPortalMode()) return;
 
-  setupAuthUIEnhancements();
   bindEvents();
   checkAuth();
 }
