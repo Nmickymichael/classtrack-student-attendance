@@ -64,11 +64,23 @@
 
       <!-- SIGN IN FORM -->
       <form id="loginForm">
-        <label>Staff ID / Email
-          <input type="text" id="loginStaffId" placeholder="e.g. LEC/001 or default: admin" required>
+        <label>Email address
+          <input
+            type="email"
+            id="loginStaffId"
+            placeholder="Enter your registered email"
+            autocomplete="email"
+            required
+          >
         </label>
-        <label>Access PIN / Password
-          <input type="password" id="loginPin" placeholder="Enter your PIN / Password" maxlength="20" required>
+        <label>Account Password
+          <input
+            type="password"
+            id="loginPin"
+            placeholder="Enter your password"
+            autocomplete="current-password"
+            required
+          >
         </label>
         <p class="login-error" id="loginError"></p>
         <button type="submit" class="btn btn-primary btn-full">Unlock Workspace</button>
@@ -80,14 +92,27 @@
         <label>Full Name
           <input type="text" id="regName" placeholder="e.g. Dr. Sarah Mwangi" required>
         </label>
-        <label>Staff ID or Email
-          <input type="text" id="regStaffId" placeholder="e.g. LEC/2026/04" required>
+        <label>Lecturer Email address
+          <input
+            type="email"
+            id="regStaffId"
+            placeholder="Enter your email address"
+            autocomplete="email"
+            required
+          >
         </label>
         <label>Department
           <input type="text" id="regDept" placeholder="e.g. Computing & Informatics" required>
         </label>
-        <label>Create Access PIN / Password
-          <input type="password" id="regPin" placeholder="Choose a PIN (min 4 chars)" minlength="4" maxlength="20" required>
+        <label>Create Account Password
+          <input
+            type="password"
+            id="regPin"
+            placeholder="Minimum 8 characters"
+            minlength="8"
+            autocomplete="new-password"
+            required
+          >
         </label>
         <p class="login-error" id="signUpError"></p>
         <button type="submit" class="btn btn-primary btn-full">Register &amp; Enter Workspace</button>
