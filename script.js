@@ -1277,7 +1277,7 @@ function openStudent(id = "") {
   $("studentDialog").showModal();
 }
 
-function saveStudent(event) {
+async function saveStudent(event) {
   event.preventDefault();
   const id = $("studentId").value;
   const name = $("studentName").value.trim();
@@ -1300,31 +1300,42 @@ function saveStudent(event) {
 
   const targetClass = data.classes.find(c => c.id === classId);
   const ownerStaffId = targetClass?._ownerStaffId || currentLecturer?.staffId || "admin";
+  const student = id
+    ? data.students.find(item => item.id === id)
+    : { id: makeId(), createdDate: today() };
 
-  if (id) {
-    const student = data.students.find(item => item.id === id);
-    Object.assign(student, { name, admission, classId, phone, _ownerStaffId: ownerStaffId });
-  } else {
-    data.students.push({
-      id: makeId(),
-      name,
-      admission,
-      classId,
-      phone,
-      createdDate: today(),
-      _ownerStaffId: ownerStaffId
-    });
+  if (!student) {
+    toast("Could not find the student you are trying to update.");
+    return;
   }
 
-  if (saveData()) {
+  const updatedStudent = {
+    ...student, name, admission, classId, phone,
+    _ownerStaffId: ownerStaffId
+  };
+  const submitButton = $("studentForm").querySelector('button[type="submit"]');
+  if (submitButton) { submitButton.disabled = true; submitButton.textContent = "Saving to cloud..."; }
+
+  try {
+    const cloudStudent = await saveStudentToCloud(updatedStudent);
+    const index = data.students.findIndex(item => item.id === updatedStudent.id);
+    if (index >= 0) data.students[index] = cloudStudent;
+    else data.students.push(cloudStudent);
+
+    saveData();
     $("studentDialog").close();
     renderStudents();
     renderDashboard();
-    toast(id ? "Student updated." : "Student registered.");
+    toast(id ? "Student updated and synced to Supabase." : "Student registered and synced to Supabase.");
+  } catch (error) {
+    console.error("Supabase student save failed:", error);
+    toast("Student was not saved to the cloud: " + (error.message || "Check Supabase RLS policies."));
+  } finally {
+    if (submitButton) { submitButton.disabled = false; submitButton.textContent = "Save Student"; }
   }
 }
 
-function handleStudentActions(event) {
+async function handleStudentActions(event) {
   const editButton = event.target.closest("[data-edit-student]");
   const deleteButton = event.target.closest("[data-delete-student]");
 
@@ -1333,13 +1344,26 @@ function handleStudentActions(event) {
   if (deleteButton) {
     const id = deleteButton.dataset.deleteStudent;
     const student = data.students.find(item => item.id === id);
-    if (confirm(`Delete ${student?.name || "this student"}? Their attendance history will also be deleted.`)) {
+    if (!confirm(`Delete ${student?.name || "this student"}? Their attendance history will also be deleted.`)) return;
+
+    try {
+      const { error: attendanceError } = await supabaseClient
+        .from("attendance").delete().eq("student_id", id);
+      if (attendanceError) throw attendanceError;
+      const { error: studentError } = await supabaseClient
+        .from("students").delete().eq("id", id);
+      if (studentError) throw studentError;
+
       data.students = data.students.filter(item => item.id !== id);
       data.attendance = data.attendance.filter(record => record.studentId !== id);
       saveData();
       renderStudents();
       renderDashboard();
-      toast("Student and related attendance records deleted.");
+      renderReports();
+      toast("Student and related cloud attendance records deleted.");
+    } catch (error) {
+      console.error("Supabase student deletion failed:", error);
+      toast("Could not delete student from the cloud: " + (error.message || "Check Supabase RLS policies."));
     }
   }
 }
@@ -1432,7 +1456,7 @@ async function openEnrollModal(classId) {
   }
 }
 
-function handleSelfEnrollSubmit(event) {
+async function handleSelfEnrollSubmit(event) {
   event.preventDefault();
   const classId = $("enrollTargetClassId").value;
   const name = $("selfRegName").value.trim();
@@ -1452,42 +1476,33 @@ function handleSelfEnrollSubmit(event) {
   }
 
   const targetClass = data.classes.find(c => c.id === classId);
-  data.students.push({
-    id: makeId(),
-    name,
-    admission,
-    classId,
-    phone,
+  const student = {
+    id: makeId(), name, admission, classId, phone,
     createdDate: today(),
     _ownerStaffId: targetClass?._ownerStaffId || currentLecturer?.staffId || "admin"
-  });
+  };
 
-  if (saveData()) {
+  fb.textContent = "Saving student to Supabase...";
+  fb.className = "kiosk-feedback";
+  try {
+    const cloudStudent = await saveStudentToCloud(student);
+    data.students.push(cloudStudent);
+    saveData();
     renderClasses();
     renderStudents();
     renderDashboard();
-    fb.textContent = `✓ ${name} (${admission}) enrolled into ${getClassName(classId)}!`;
+    fb.textContent = `✓ ${name} (${admission}) enrolled and synced to Supabase!`;
     fb.className = "kiosk-feedback ok";
     $("selfRegName").value = "";
     $("selfRegAdm").value = "";
     $("selfRegPhone").value = "";
     toast(`${name} self-registered!`);
+  } catch (error) {
+    console.error("Supabase self-enrollment failed:", error);
+    fb.textContent = "Could not save registration: " + (error.message || "Check Supabase RLS policies.");
+    fb.className = "kiosk-feedback err";
   }
 }
-
-function openClass(id = "") {
-  $("classForm").reset();
-  $("classId").value = id;
-  const classItem = data.classes.find(item => item.id === id);
-  $("classDialogTitle").textContent = classItem ? "Edit class / unit" : "Add class / unit";
-
-  if (classItem) {
-    $("className").value = classItem.name;
-    $("classCode").value = classItem.code || "";
-  }
-  $("classDialog").showModal();
-}
-
 
 /* SUPABASE CLASS, STUDENT & ATTENDANCE SYNC */
 async function ensureCloudClass(classItem) {
@@ -1499,6 +1514,80 @@ async function ensureCloudClass(classItem) {
   if (error) throw error;
   return cloudClass;
 }
+/* Save a student directly to Supabase.
+   The class is ensured in the cloud first so the student foreign key is valid. */
+async function saveStudentToCloud(student) {
+  const classItem = data.classes.find(item => item.id === student.classId);
+  if (!classItem) throw new Error("The selected class could not be found.");
+  const cloudClass = await ensureCloudClass(classItem);
+  const payload = {
+    id: student.id,
+    class_id: cloudClass.id,
+    full_name: student.name,
+    admission_number: student.admission,
+    phone: student.phone || "",
+    email: student.email || null
+  };
+  const { data: savedStudent, error } = await supabaseClient
+    .from("students")
+    .upsert(payload, { onConflict: "id" })
+    .select("id, class_id, full_name, admission_number, phone, email, created_at")
+    .single();
+  if (error) throw error;
+  return {
+    id: savedStudent.id,
+    classId: savedStudent.class_id,
+    name: savedStudent.full_name,
+    admission: savedStudent.admission_number,
+    phone: savedStudent.phone || "",
+    email: savedStudent.email || "",
+    createdDate: savedStudent.created_at ? savedStudent.created_at.slice(0, 10) : today(),
+    _cloudRecord: true,
+    _ownerStaffId: currentLecturer.staffId
+  };
+}
+
+/* Save an attendance record directly to Supabase. */
+async function saveAttendanceToCloud(record) {
+  const classItem = data.classes.find(item => item.id === record.classId);
+  const student = data.students.find(item => item.id === record.studentId);
+  if (!classItem || !student) throw new Error("Class or student is missing for this attendance record.");
+  const cloudClass = await ensureCloudClass(classItem);
+  await saveStudentToCloud({ ...student, classId: cloudClass.id });
+  const payload = {
+    id: record.id,
+    class_id: cloudClass.id,
+    student_id: student.id,
+    attendance_date: record.date,
+    status: record.status,
+    notes: record.remarks || ""
+  };
+  const { data: savedRecord, error } = await supabaseClient
+    .from("attendance")
+    .upsert(payload, { onConflict: "id" })
+    .select("id, class_id, student_id, attendance_date, status, notes, created_at")
+    .single();
+  if (error) throw error;
+  return {
+    id: savedRecord.id,
+    classId: savedRecord.class_id,
+    studentId: savedRecord.student_id,
+    date: savedRecord.attendance_date,
+    status: savedRecord.status,
+    remarks: savedRecord.notes || "",
+    createdAt: savedRecord.created_at,
+    _cloudRecord: true,
+    _ownerStaffId: currentLecturer.staffId
+  };
+}
+
+/* Persist a batch of attendance changes before updating the local cache. */
+async function saveAttendanceBatchToCloud(records) {
+  const saved = [];
+  for (const record of records) saved.push(await saveAttendanceToCloud(record));
+  return saved;
+}
+
 async function refreshCloudClassData(showErrors = false) {
   if (!currentLecturer?.id) return;
   const classIds = data.classes.map(item => item.id);
@@ -1784,7 +1873,7 @@ function openStudentKiosk() {
   $("studentKioskDialog").showModal();
 }
 
-function handleStudentSelfCheckIn(event) {
+async function handleStudentSelfCheckIn(event) {
   event.preventDefault();
   const feedback = $("kioskFeedback");
 
@@ -1808,7 +1897,6 @@ function handleStudentSelfCheckIn(event) {
   const existingIndex = data.attendance.findIndex(
     r => r.studentId === student.id && r.classId === activeQrSession.classId && r.date === activeQrSession.date
   );
-
   const record = {
     id: existingIndex >= 0 ? data.attendance[existingIndex].id : makeId(),
     studentId: student.id,
@@ -1820,20 +1908,24 @@ function handleStudentSelfCheckIn(event) {
     _ownerStaffId: activeQrSession.ownerId
   };
 
-  if (existingIndex >= 0) {
-    data.attendance[existingIndex] = record;
-  } else {
-    data.attendance.push(record);
+  feedback.textContent = "Recording attendance in Supabase...";
+  feedback.className = "kiosk-feedback";
+  try {
+    const cloudRecord = await saveAttendanceToCloud(record);
+    if (existingIndex >= 0) data.attendance[existingIndex] = cloudRecord;
+    else data.attendance.push(cloudRecord);
+    saveData();
+    renderRegister();
+    renderDashboard();
+    feedback.textContent = `✓ Checked in: ${student.name} (${student.admission})`;
+    feedback.className = "kiosk-feedback ok";
+    $("kioskAdmissionInput").value = "";
+    toast(`${student.name} checked in via QR portal!`);
+  } catch (error) {
+    console.error("Supabase QR attendance save failed:", error);
+    feedback.textContent = "Attendance could not be saved: " + (error.message || "Check Supabase RLS policies.");
+    feedback.className = "kiosk-feedback err";
   }
-
-  saveData();
-  renderRegister();
-  renderDashboard();
-
-  feedback.textContent = `✓ Checked in: ${student.name} (${student.admission})`;
-  feedback.className = "kiosk-feedback ok";
-  $("kioskAdmissionInput").value = "";
-  toast(`${student.name} checked in via QR portal!`);
 }
 
 /* =========================================
@@ -1938,7 +2030,7 @@ function setBulkStatus(targetStatus) {
   toast(`All students marked ${targetStatus}. Click Save to confirm.`);
 }
 
-function saveRegister() {
+async function saveRegister() {
   const classId = $("attendanceClass").value;
   const date = $("attendanceDate").value;
   if (!classId || !date) {
@@ -1954,40 +2046,39 @@ function saveRegister() {
 
   const targetClass = data.classes.find(c => c.id === classId);
   const ownerStaffId = targetClass?._ownerStaffId || currentLecturer?.staffId || "admin";
-
-  recordLecturerTeachingSignIn(classId, "Class Register Recorded", true);
-
-  rows.forEach(row => {
+  const pendingRecords = rows.map(row => {
     const studentId = row.dataset.registerRow;
     const status = row.querySelector(".status-option.selected")?.dataset.status || "Present";
     const remarks = row.querySelector("[data-remarks]")?.value.trim() || "";
-
-    const existingIndex = data.attendance.findIndex(
+    const existing = data.attendance.find(
       record => record.studentId === studentId && record.classId === classId && record.date === date
     );
-
-    const record = {
-      id: existingIndex >= 0 ? data.attendance[existingIndex].id : makeId(),
-      studentId,
-      classId,
-      date,
-      status,
-      remarks,
-      createdAt: new Date().toISOString(),
+    return {
+      id: existing?.id || makeId(), studentId, classId, date, status, remarks,
+      createdAt: existing?.createdAt || new Date().toISOString(),
       _ownerStaffId: ownerStaffId
     };
-
-    if (existingIndex >= 0) {
-      data.attendance[existingIndex] = record;
-    } else {
-      data.attendance.push(record);
-    }
   });
 
-  if (saveData()) {
-    toast("Attendance register saved successfully.");
+  const saveButton = $("saveRegisterBtn");
+  if (saveButton) { saveButton.disabled = true; saveButton.textContent = "Saving to cloud..."; }
+  try {
+    const cloudRecords = await saveAttendanceBatchToCloud(pendingRecords);
+    recordLecturerTeachingSignIn(classId, "Class Register Recorded", true);
+    cloudRecords.forEach(cloudRecord => {
+      const index = data.attendance.findIndex(record => record.id === cloudRecord.id);
+      if (index >= 0) data.attendance[index] = cloudRecord;
+      else data.attendance.push(cloudRecord);
+    });
+    saveData();
+    toast("Attendance register saved and synced to Supabase.");
     renderRegister();
     renderDashboard();
+  } catch (error) {
+    console.error("Supabase attendance save failed:", error);
+    toast("Attendance was not saved to the cloud: " + (error.message || "Check Supabase RLS policies."));
+  } finally {
+    if (saveButton) { saveButton.disabled = false; saveButton.textContent = "Save Attendance"; }
   }
 }
 
