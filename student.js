@@ -13,6 +13,7 @@ const loginForm = byId("studentLoginForm");
 const signupForm = byId("studentSignupForm");
 const registrationForm = byId("studentRegistrationForm");
 const checkinPanel = byId("studentCheckinPanel");
+const checkinForm = byId("studentCheckinForm");
 const message = byId("studentMessage");
 let activeStudentUser = null;
 
@@ -32,9 +33,9 @@ function setStudentHeading() {
 }
 function setSignedInUI(user) {
   activeStudentUser = user;
-  byId("studentSignOut").classList.remove("student-hidden");
   byId("studentModeToggle").classList.add("student-hidden");
   if (studentMode === "checkin") {
+    byId("studentCheckinAdmission").value = "";
     showStudentPanel(checkinPanel);
   } else if (studentMode === "register" && enrollmentToken) {
     showStudentPanel(registrationForm);
@@ -74,26 +75,34 @@ async function submitStudentRegistration(event) {
     button.textContent = "Complete class registration";
   }
 }
-async function submitStudentCheckin() {
+async function submitStudentCheckin(event) {
+  event.preventDefault();
   if (!activeStudentUser || !attendanceToken) {
     studentMessage("This QR code is missing a valid lecture session.", true);
     return;
   }
   const button = byId("studentCheckinButton");
+  const admissionNumber = byId("studentCheckinAdmission").value.trim();
+  if (!admissionNumber) {
+    studentMessage("Enter your admission number to continue.", true);
+    return;
+  }
   button.disabled = true;
-  button.textContent = "Checking in...";
+  button.textContent = "Verifying admission number...";
   try {
     const { data, error } = await studentSupabase.rpc("student_check_in", {
-      p_session_token: attendanceToken
+      p_session_token: attendanceToken,
+      p_admission_number: admissionNumber
     });
     if (error) throw error;
     studentMessage(data?.message || "Attendance recorded successfully.");
     button.textContent = "✓ Attendance recorded";
+    byId("studentCheckinAdmission").disabled = true;
   } catch (error) {
     console.error("Student check-in error:", error);
     studentMessage(error.message || "Could not record attendance.", true);
     button.disabled = false;
-    button.textContent = "✓ Check in as present";
+    button.textContent = "✓ Verify and check in";
   }
 }
 loginForm.addEventListener("submit", async event => {
@@ -146,7 +155,7 @@ signupForm.addEventListener("submit", async event => {
   }
 });
 registrationForm.addEventListener("submit", submitStudentRegistration);
-byId("studentCheckinButton").addEventListener("click", submitStudentCheckin);
+checkinForm.addEventListener("submit", submitStudentCheckin);
 byId("studentModeToggle").addEventListener("click", () => {
   const showingSignup = !signupForm.classList.contains("student-hidden");
   showStudentPanel(showingSignup ? loginForm : signupForm);
@@ -154,17 +163,6 @@ byId("studentModeToggle").addEventListener("click", () => {
     ? "New student? Create an account"
     : "Already registered? Sign in";
   studentMessage("");
-});
-byId("studentSignOut").addEventListener("click", async () => {
-  const { error } = await studentSupabase.auth.signOut();
-  if (error) return studentMessage(error.message, true);
-  activeStudentUser = null;
-  byId("studentSignOut").classList.add("student-hidden");
-  byId("studentModeToggle").classList.remove("student-hidden");
-  byId("studentModeToggle").textContent = "New student? Create an account";
-  byId("studentCheckinButton").disabled = false;
-  showStudentPanel(loginForm);
-  studentMessage("You have signed out.");
 });
 async function initStudentPortal() {
   setStudentHeading();
