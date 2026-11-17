@@ -61,15 +61,18 @@
     </form>
 
     <section id="studentCheckinPanel" class="student-hidden">
-      <p class="muted">You are signed in. Tap below to record your attendance for this lecture.</p>
-      <button id="studentCheckinButton" class="btn btn-primary btn-full" type="button">✓ Check in as present</button>
+      <p class="muted">Enter your admission number to verify your identity for this lecture, then check in.</p>
+      <form id="studentCheckinForm">
+        <label>Admission number
+          <input id="studentCheckinAdmission" type="text" autocomplete="off" required placeholder="Enter your admission number">
+        </label>
+        <button id="studentCheckinButton" class="btn btn-primary btn-full" type="submit">✓ Verify and check in</button>
+      </form>
     </section>
 
     <p id="studentMessage" class="student-message" role="status" aria-live="polite"></p>
     <div class="student-actions">
       <button id="studentModeToggle" type="button">New student? Create an account</button>
-      <button id="studentSignOut" class="student-hidden" type="button">Sign out</button>
-      <a href="./" style="color:#2863c8">Lecturer portal</a>
     </div>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
