@@ -1588,54 +1588,127 @@ async function saveAttendanceBatchToCloud(records) {
   return saved;
 }
 
+function setCloudStatus(active, detail = "") {
+  const note = document.querySelector(".storage-note");
+  if (!note) return;
+  const heading = note.querySelector("strong");
+  const description = note.querySelector("small");
+  const dot = note.querySelector(".status-dot");
+  if (heading) heading.textContent = active ? "Cloud sync active" : "Cloud sync unavailable";
+  if (description) description.textContent = active
+    ? "Synced with Supabase"
+    : (detail || "Could not reach Supabase");
+  if (dot) {
+    dot.style.backgroundColor = active ? "#16a34a" : "#dc2626";
+    dot.style.boxShadow = active ? "0 0 0 3px rgba(22,163,74,.12)" : "0 0 0 3px rgba(220,38,38,.12)";
+  }
+}
+
 async function refreshCloudClassData(showErrors = false) {
-  if (!currentLecturer?.id) return;
-  const classIds = data.classes.map(item => item.id);
-  if (!classIds.length) return;
+  if (!currentLecturer?.id) {
+    setCloudStatus(false, "Sign in to connect");
+    return;
+  }
+
   try {
-    const { data: cloudStudents, error: studentError } = await supabaseClient.from("students")
-      .select("id, class_id, full_name, admission_number, phone, email, created_at").in("class_id", classIds);
-    if (studentError) throw studentError;
-    const remoteStudents = (cloudStudents || []).map(student => ({
-      id: student.id, classId: student.class_id, name: student.full_name,
-      admission: student.admission_number, phone: student.phone || "", email: student.email || "",
-      createdDate: student.created_at ? student.created_at.slice(0, 10) : today(), _cloudRecord: true
+    // Classes are the starting point. Fetch them by the authenticated lecturer's
+    // Supabase user ID so a fresh browser can rebuild its workspace from cloud data.
+    const { data: cloudClasses, error: classError } = await supabaseClient
+      .from("classes")
+      .select("id, owner_id, name, code, department, enrollment_enabled, enrollment_token, created_at")
+      .eq("owner_id", currentLecturer.id);
+    if (classError) throw classError;
+
+    const remoteClasses = (cloudClasses || []).map(cls => ({
+      id: cls.id,
+      name: cls.name,
+      code: cls.code || "",
+      department: cls.department || currentLecturer.department || "",
+      enrollmentEnabled: cls.enrollment_enabled !== false,
+      enrollmentToken: cls.enrollment_token || "",
+      createdDate: cls.created_at ? cls.created_at.slice(0, 10) : today(),
+      _cloudRecord: true,
+      _ownerStaffId: currentLecturer.staffId
     }));
-    const classSet = new Set(classIds);
-    const cloudByAdmission = new Map(remoteStudents.map(student =>
-      [student.classId + "|" + student.admission.toLowerCase(), student]
-    ));
-    const replacedStudentIds = new Map();
-    const retainedStudents = data.students.filter(student => {
-      if (!classSet.has(student.classId)) return true;
-      if (student._cloudRecord) return false;
-      const match = cloudByAdmission.get(student.classId + "|" + String(student.admission || "").toLowerCase());
-      if (match) {
-        replacedStudentIds.set(student.id, match.id);
-        return false;
-      }
-      return true;
-    });
-    data.students = retainedStudents.concat(remoteStudents);
-    if (replacedStudentIds.size) {
-      data.attendance.forEach(record => {
-        if (replacedStudentIds.has(record.studentId)) {
-          record.studentId = replacedStudentIds.get(record.studentId);
-        }
+    const classIds = remoteClasses.map(cls => cls.id);
+    const previousClassIds = new Set(data.classes
+      .filter(cls => (cls._ownerStaffId || currentLecturer.staffId) === currentLecturer.staffId)
+      .map(cls => cls.id));
+
+    // Replace this lecturer's cached classes with the authoritative cloud list,
+    // while retaining any other locally aggregated workspace entries.
+    data.classes = data.classes.filter(cls =>
+      (cls._ownerStaffId || currentLecturer.staffId) !== currentLecturer.staffId
+    ).concat(remoteClasses);
+
+    if (classIds.length) {
+      const { data: cloudStudents, error: studentError } = await supabaseClient
+        .from("students")
+        .select("id, class_id, full_name, admission_number, phone, email, created_at")
+        .in("class_id", classIds);
+      if (studentError) throw studentError;
+
+      const remoteStudents = (cloudStudents || []).map(student => ({
+        id: student.id,
+        classId: student.class_id,
+        name: student.full_name,
+        admission: student.admission_number,
+        phone: student.phone || "",
+        email: student.email || "",
+        createdDate: student.created_at ? student.created_at.slice(0, 10) : today(),
+        _cloudRecord: true,
+        _ownerStaffId: currentLecturer.staffId
+      }));
+
+      const cloudByAdmission = new Map(remoteStudents.map(student => [
+        student.classId + "|" + String(student.admission || "").toLowerCase(), student
+      ]));
+      const replacedStudentIds = new Map();
+      const retainedStudents = data.students.filter(student => {
+        if (!classIds.includes(student.classId)) return true;
+        const match = cloudByAdmission.get(student.classId + "|" + String(student.admission || "").toLowerCase());
+        if (match && student.id !== match.id) replacedStudentIds.set(student.id, match.id);
+        return !student._cloudRecord && !match;
       });
+      data.students = retainedStudents.concat(remoteStudents);
+
+      if (replacedStudentIds.size) {
+        data.attendance.forEach(record => {
+          if (replacedStudentIds.has(record.studentId)) record.studentId = replacedStudentIds.get(record.studentId);
+        });
+      }
+
+      const { data: cloudAttendance, error: attendanceError } = await supabaseClient
+        .from("attendance")
+        .select("id, class_id, student_id, attendance_date, status, notes, created_at")
+        .in("class_id", classIds);
+      if (attendanceError) throw attendanceError;
+
+      const remoteAttendance = (cloudAttendance || []).map(record => ({
+        id: record.id,
+        classId: record.class_id,
+        studentId: record.student_id,
+        date: record.attendance_date,
+        status: record.status,
+        remarks: record.notes || "",
+        createdAt: record.created_at,
+        _cloudRecord: true,
+        _ownerStaffId: currentLecturer.staffId
+      }));
+      const remoteAttendanceIds = new Set(remoteAttendance.map(record => record.id));
+      data.attendance = data.attendance.filter(record =>
+        !classIds.includes(record.classId) || (!record._cloudRecord && !remoteAttendanceIds.has(record.id))
+      ).concat(remoteAttendance);
+    } else {
+      // A lecturer with no cloud classes should not keep showing stale cloud-linked
+      // students or attendance from a class that no longer belongs to the account.
+      data.students = data.students.filter(student => !previousClassIds.has(student.classId));
+      data.attendance = data.attendance.filter(record => !previousClassIds.has(record.classId));
     }
-    const { data: cloudAttendance, error: attendanceError } = await supabaseClient.from("attendance")
-      .select("id, class_id, student_id, attendance_date, status, notes, created_at").in("class_id", classIds);
-    if (attendanceError) throw attendanceError;
-    const remoteAttendance = (cloudAttendance || []).map(record => ({
-      id: record.id, classId: record.class_id, studentId: record.student_id,
-      date: record.attendance_date, status: record.status, remarks: record.notes || "",
-      createdAt: record.created_at, _cloudRecord: true, _ownerStaffId: currentLecturer.staffId
-    }));
-    const remoteAttendanceIds = new Set(remoteAttendance.map(record => record.id));
-    data.attendance = data.attendance.filter(record =>
-      !classSet.has(record.classId) || (!record._cloudRecord && !remoteAttendanceIds.has(record.id))
-    ).concat(remoteAttendance);
+
+    saveData();
+    setCloudStatus(true, "Synced with Supabase");
+    populateClassSelects();
     if ($("view-students").classList.contains("active") &&
         document.activeElement !== $("studentSearch")) renderStudents();
     if ($("view-classes").classList.contains("active")) renderClasses();
@@ -1645,7 +1718,8 @@ async function refreshCloudClassData(showErrors = false) {
         $("attendanceClass").value) renderRegister();
   } catch (error) {
     console.error("ClassTrack cloud refresh failed:", error);
-    if (showErrors) toast("Cloud refresh failed: " + (error.message || "Check Supabase setup."));
+    setCloudStatus(false, error.message || "Supabase request failed");
+    if (showErrors) toast("Cloud refresh failed: " + (error.message || "Check Supabase RLS policies and table columns."));
   }
 }
 function startCloudRefresh() {
@@ -1682,7 +1756,7 @@ async function endTeachingClass(classId) {
   toast("Lecture ended at " + log.signOutTime + ". You have signed out of " + cls.name + ".");
 }
 
-function saveClass(event) {
+async function saveClass(event) {
   event.preventDefault();
   const id = $("classId").value;
   const name = $("className").value.trim();
@@ -1696,28 +1770,87 @@ function saveClass(event) {
     alert("A class with that name already exists.");
     return;
   }
-
-  if (id) {
-    Object.assign(data.classes.find(item => item.id === id), { name, code });
-  } else {
-    data.classes.push({
-      id: makeId(),
-      name,
-      code,
-      createdDate: today(),
-      _ownerStaffId: currentLecturer?.staffId || "admin"
-    });
+  if (!currentLecturer?.id) {
+    toast("Please sign in again before saving a class.");
+    return;
   }
 
-  if (saveData()) {
+  const saveButton = $("classForm").querySelector('button[type="submit"]');
+  const originalButtonText = saveButton?.textContent || "Save class";
+  if (saveButton) {
+    saveButton.disabled = true;
+    saveButton.textContent = "Saving to cloud...";
+  }
+
+  try {
+    let savedClass;
+    if (id) {
+      const existing = data.classes.find(item => item.id === id);
+      if (!existing) throw new Error("The class you are editing could not be found.");
+      const { data: updated, error } = await supabaseClient
+        .from("classes")
+        .update({ name, code, department: currentLecturer.department || "" })
+        .eq("id", id)
+        .eq("owner_id", currentLecturer.id)
+        .select("id, owner_id, name, code, department, enrollment_enabled, enrollment_token, created_at")
+        .single();
+      if (error) throw error;
+      savedClass = updated;
+    } else {
+      const { data: inserted, error } = await supabaseClient
+        .from("classes")
+        .insert({
+          id: makeId(),
+          owner_id: currentLecturer.id,
+          name,
+          code,
+          department: currentLecturer.department || "",
+          enrollment_enabled: true
+        })
+        .select("id, owner_id, name, code, department, enrollment_enabled, enrollment_token, created_at")
+        .single();
+      if (error) throw error;
+      savedClass = inserted;
+    }
+
+    const mappedClass = {
+      id: savedClass.id,
+      name: savedClass.name,
+      code: savedClass.code || "",
+      department: savedClass.department || "",
+      enrollmentEnabled: savedClass.enrollment_enabled !== false,
+      enrollmentToken: savedClass.enrollment_token || "",
+      createdDate: savedClass.created_at ? savedClass.created_at.slice(0, 10) : today(),
+      _cloudRecord: true,
+      _ownerStaffId: currentLecturer.staffId
+    };
+    const existingIndex = data.classes.findIndex(item => item.id === mappedClass.id);
+    if (existingIndex >= 0) data.classes[existingIndex] = mappedClass;
+    else data.classes.push(mappedClass);
+
+    saveData();
+    setCloudStatus(true, "Synced with Supabase");
     $("classDialog").close();
+    populateClassSelects();
     renderClasses();
     renderStudents();
     renderDashboard();
-    toast(id ? "Class updated." : "Class created.");
+    toast(id ? "Class updated and synced to Supabase." : "Class created and saved to Supabase.");
+  } catch (error) {
+    console.error("Supabase class save failed:", error);
+    const message = error.message || error.details || "Unknown Supabase error";
+    setCloudStatus(false, message);
+    toast("Class was not saved to Supabase: " + message);
+    alert("Could not save this class to Supabase.\n\n" + message +
+      (error.code ? "\nError code: " + error.code : "") +
+      "\n\nCheck the classes table columns and its INSERT/UPDATE RLS policies.");
+  } finally {
+    if (saveButton) {
+      saveButton.disabled = false;
+      saveButton.textContent = originalButtonText;
+    }
   }
 }
-
 function handleClassActions(event) {
   const teachButton = event.target.closest("[data-teach-class]");
   const enrollButton = event.target.closest("[data-enroll-class]");
