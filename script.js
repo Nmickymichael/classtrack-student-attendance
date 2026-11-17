@@ -65,6 +65,7 @@ let data = emptyWorkspace();
 let currentReport = [];
 let activeQrSession = null;
 let sessionTimerInterval = null;
+let cloudRefreshInterval = null;
 let portalTimerInterval = null;
 
 /* =========================================
@@ -817,6 +818,7 @@ function unlockApp(user) {
 
   populateClassSelects();
   showView("dashboard");
+  startCloudRefresh();
 }
 
 // Sign out of Supabase.
@@ -827,6 +829,7 @@ async function lockApp() {
     if (error) throw error;
 
     stopQrSession(true);
+    clearInterval(cloudRefreshInterval);
 
     currentLecturer = null;
     data = emptyWorkspace();
@@ -1344,7 +1347,7 @@ function renderClasses() {
         .map(classItem => {
           const count = data.students.filter(student => student.classId === classItem.id).length;
           const classLogs = (data.teachingLogs || []).filter(l => l.classId === classItem.id);
-          const signedInToday = classLogs.some(l => l.date === todayStr);
+          const signedInToday = classLogs.some(l => l.date === todayStr && l.status === "Signed In · Teaching");
 
           const ownerBadge = adminMode && classItem._ownerName
             ? `<div style="font-size:11px;color:#2f6fed;font-weight:600;margin-top:4px;">Lecturer: ${escapeHTML(classItem._ownerName)}</div>`
@@ -1362,6 +1365,7 @@ function renderClasses() {
                   <button class="action-btn" style="background:#e9f8f2;color:#11835c;border-color:#bfe8d8;font-weight:600;" data-teach-class="${escapeHTML(classItem.id)}">
                     ${signedInToday ? "✓ Signed In" : "✓ Sign In to Teach"}
                   </button>
+                  ${signedInToday ? `<button class="action-btn delete" data-end-teach-class="${escapeHTML(classItem.id)}">End Lecture / Sign Out</button>` : ""}
                   <button class="action-btn enroll" data-enroll-class="${escapeHTML(classItem.id)}">⊞ Day 1 Enroll QR</button>
                   <button class="action-btn" data-edit-class="${escapeHTML(classItem.id)}">Edit</button>
                   <button class="action-btn delete" data-delete-class="${escapeHTML(classItem.id)}">Delete</button>
@@ -1381,34 +1385,33 @@ function renderClasses() {
     : `<div class="panel empty-state" style="grid-column:1/-1"><div class="empty-symbol">▤</div><h3>No classes created yet</h3><p>Add as many classes or units as needed, sign in when teaching, and share each unit's Day 1 Enroll QR.</p></div>`;
 }
 
-function openEnrollModal(classId) {
-  const classItem = data.classes.find(c => c.id === classId);
-  if (!classItem) return;
 
+async function openEnrollModal(classId) {
+  const classItem = data.classes.find(item => item.id === classId);
+  if (!classItem) return;
   $("selfEnrollForm").reset();
   $("enrollTargetClassId").value = classId;
-  $("enrollModalClassName").textContent = `${classItem.name} — Day 1 Onboarding`;
-  $("selfEnrollFeedback").textContent = "";
+  $("enrollModalClassName").textContent = classItem.name + " — Student Registration";
+  $("selfEnrollFeedback").textContent = "Preparing secure student registration QR...";
   $("selfEnrollFeedback").className = "kiosk-feedback";
-
-  const baseUrl = window.location.href.split("?")[0];
-  const ownerId = classItem._ownerStaffId || currentLecturer?.staffId || "admin";
-  const enrollUrl = `${baseUrl}?mode=enroll&lec=${encodeURIComponent(ownerId)}&class=${encodeURIComponent(classId)}&cname=${encodeURIComponent(classItem.name)}`;
-  $("enrollShareLink").value = enrollUrl;
-
-  const qrBox = $("enrollQrBox");
-  qrBox.innerHTML = "";
-  if (typeof QRCode !== "undefined") {
-    new QRCode(qrBox, {
-      text: enrollUrl,
-      width: 115,
-      height: 115,
-      colorDark: "#15233d",
-      colorLight: "#ffffff"
+  try {
+    const cloudClass = await ensureCloudClass(classItem);
+    const baseUrl = window.location.href.split("?")[0];
+    const enrollUrl = baseUrl + "student.html?mode=register&token=" + encodeURIComponent(cloudClass.enrollment_token);
+    $("enrollShareLink").value = enrollUrl;
+    const qrBox = $("enrollQrBox"); qrBox.innerHTML = "";
+    if (typeof QRCode !== "undefined") new QRCode(qrBox, {
+      text: enrollUrl, width: 115, height: 115, colorDark: "#15233d", colorLight: "#ffffff"
     });
+    $("selfEnrollFeedback").textContent = "Students scan this code to open the separate Student Portal, create an account and register.";
+    $("selfEnrollFeedback").className = "kiosk-feedback ok";
+    $("enrollQrDialog").showModal();
+  } catch (error) {
+    console.error("Could not prepare student registration QR:", error);
+    $("selfEnrollFeedback").textContent = error.message || "Could not create registration QR. Check Supabase.";
+    $("selfEnrollFeedback").className = "kiosk-feedback err";
+    $("enrollQrDialog").showModal();
   }
-
-  $("enrollQrDialog").showModal();
 }
 
 function handleSelfEnrollSubmit(event) {
@@ -1467,6 +1470,82 @@ function openClass(id = "") {
   $("classDialog").showModal();
 }
 
+
+/* SUPABASE CLASS, STUDENT & ATTENDANCE SYNC */
+async function ensureCloudClass(classItem) {
+  if (!currentLecturer?.id || !classItem?.id) throw new Error("Please sign in to your lecturer account first.");
+  const { data: cloudClass, error } = await supabaseClient.from("classes").upsert({
+    id: classItem.id, owner_id: currentLecturer.id, name: classItem.name,
+    code: classItem.code || "", department: currentLecturer.department || "", enrollment_enabled: true
+  }, { onConflict: "id" }).select("id, enrollment_token").single();
+  if (error) throw error;
+  return cloudClass;
+}
+async function refreshCloudClassData(showErrors = false) {
+  if (!currentLecturer?.id) return;
+  const classIds = data.classes.map(item => item.id);
+  if (!classIds.length) return;
+  try {
+    const { data: cloudStudents, error: studentError } = await supabaseClient.from("students")
+      .select("id, class_id, full_name, admission_number, phone, email, created_at").in("class_id", classIds);
+    if (studentError) throw studentError;
+    const remoteStudents = (cloudStudents || []).map(student => ({
+      id: student.id, classId: student.class_id, name: student.full_name,
+      admission: student.admission_number, phone: student.phone || "", email: student.email || "",
+      createdDate: student.created_at ? student.created_at.slice(0, 10) : today(), _cloudRecord: true
+    }));
+    const classSet = new Set(classIds);
+    const remoteStudentIds = new Set(remoteStudents.map(student => student.id));
+    data.students = data.students.filter(student =>
+      !classSet.has(student.classId) || (!student._cloudRecord && !remoteStudentIds.has(student.id))
+    ).concat(remoteStudents);
+    const { data: cloudAttendance, error: attendanceError } = await supabaseClient.from("attendance")
+      .select("id, class_id, student_id, attendance_date, status, notes, created_at").in("class_id", classIds);
+    if (attendanceError) throw attendanceError;
+    const remoteAttendance = (cloudAttendance || []).map(record => ({
+      id: record.id, classId: record.class_id, studentId: record.student_id,
+      date: record.attendance_date, status: record.status, remarks: record.notes || "",
+      createdAt: record.created_at, _cloudRecord: true, _ownerStaffId: currentLecturer.staffId
+    }));
+    const remoteAttendanceIds = new Set(remoteAttendance.map(record => record.id));
+    data.attendance = data.attendance.filter(record =>
+      !classSet.has(record.classId) || (!record._cloudRecord && !remoteAttendanceIds.has(record.id))
+    ).concat(remoteAttendance);
+    renderStudents(); renderClasses(); renderDashboard();
+    if ($("attendanceClass").value) renderRegister();
+  } catch (error) {
+    console.error("ClassTrack cloud refresh failed:", error);
+    if (showErrors) toast("Cloud refresh failed: " + (error.message || "Check Supabase setup."));
+  }
+}
+function startCloudRefresh() {
+  clearInterval(cloudRefreshInterval);
+  refreshCloudClassData();
+  cloudRefreshInterval = setInterval(() => {
+    if (document.visibilityState === "visible") refreshCloudClassData();
+  }, 10000);
+}
+async function closeCloudAttendanceSession(sessionId) {
+  if (!sessionId) return;
+  const { error } = await supabaseClient.from("attendance_sessions").update({ is_active: false }).eq("id", sessionId);
+  if (error) console.error("Could not close cloud attendance session:", error);
+}
+function endTeachingClass(classId) {
+  const cls = data.classes.find(item => item.id === classId);
+  if (!cls) return;
+  const log = (data.teachingLogs || []).find(item =>
+    item.classId === classId && item.date === today() && item.status === "Signed In · Teaching"
+  );
+  if (!log) { toast("You are not currently signed in to teach this class."); return; }
+  if (!confirm("End this lecture and sign out of teaching for " + cls.name + "?")) return;
+  log.status = "Signed Out · Teaching Ended";
+  log.endTime = nowTimeFormatted();
+  log.endedAt = new Date().toISOString();
+  if (activeQrSession?.classId === classId) stopQrSession(true);
+  saveData(); renderClasses(); renderDashboard();
+  toast("Lecture ended. You have signed out of " + cls.name + ".");
+}
+
 function saveClass(event) {
   event.preventDefault();
   const id = $("classId").value;
@@ -1510,6 +1589,8 @@ function handleClassActions(event) {
   const deleteButton = event.target.closest("[data-delete-class]");
 
   if (teachButton) promptLecturerClassSignIn(teachButton.dataset.teachClass);
+  const endTeachButton = event.target.closest("[data-end-teach-class]");
+  if (endTeachButton) endTeachingClass(endTeachButton.dataset.endTeachClass);
   if (enrollButton) openEnrollModal(enrollButton.dataset.enrollClass);
   if (editButton) openClass(editButton.dataset.editClass);
 
@@ -1535,67 +1616,54 @@ function handleClassActions(event) {
    TIMED QR CODE & LESSON STUDENT CHECK-IN
    ========================================= */
 
-function startQrSession() {
-  const classId = $("attendanceClass").value;
-  const date = $("attendanceDate").value;
+
+async function startQrSession() {
+  const classId = $("attendanceClass").value, date = $("attendanceDate").value;
   const minutes = parseInt($("sessionDuration").value, 10) || 5;
-
-  if (!classId || !date) {
-    toast("Please select a Class and Date below first.");
-    return;
-  }
-
-  const classStudents = data.students.filter(s => s.classId === classId);
-  if (!classStudents.length) {
-    toast("No students enrolled in this class yet. Use Day 1 Enroll QR under Classes first.");
-    return;
-  }
-
-  recordLecturerTeachingSignIn(classId, "Live QR Attendance Session", true);
-  renderRegister();
-
-  const targetClass = data.classes.find(c => c.id === classId);
-  const ownerId = targetClass?._ownerStaffId || currentLecturer?.staffId || "admin";
-  const expiresAt = Date.now() + minutes * 60 * 1000;
-  const sessionToken = Math.random().toString(36).substring(2, 8).toUpperCase();
-  const className = targetClass?.name || getClassName(classId);
-
-  activeQrSession = {
-    token: sessionToken,
-    classId,
-    className,
-    date,
-    expiresAt,
-    ownerId
-  };
-
-  const baseUrl = window.location.href.split("?")[0];
-  const shareUrl = `${baseUrl}?mode=checkin&lec=${encodeURIComponent(ownerId)}&token=${sessionToken}&class=${encodeURIComponent(classId)}&cname=${encodeURIComponent(className)}&date=${date}&exp=${expiresAt}`;
-
-  $("sessionClassLabel").textContent = `${className} (${formatDate(date)})`;
-  $("sessionShareLink").value = shareUrl;
-  $("activeSessionBox").style.display = "flex";
-  $("startQrSessionBtn").style.display = "none";
-  $("stopQrSessionBtn").style.display = "inline-flex";
-
-  const qrContainer = $("qrcodeContainer");
-  qrContainer.innerHTML = "";
-  if (typeof QRCode !== "undefined") {
-    new QRCode(qrContainer, {
-      text: shareUrl,
-      width: 120,
-      height: 120,
-      colorDark: "#15233d",
-      colorLight: "#ffffff"
+  if (!classId || !date) { toast("Please select a Class and Date below first."); return; }
+  const targetClass = data.classes.find(item => item.id === classId);
+  if (!targetClass) return;
+  const button = $("startQrSessionBtn");
+  button.disabled = true; button.textContent = "Opening secure session...";
+  try {
+    const cloudClass = await ensureCloudClass(targetClass);
+    await refreshCloudClassData();
+    if (!data.students.some(student => student.classId === classId)) {
+      toast("No students are registered yet. Share the Student Registration QR first."); return;
+    }
+    recordLecturerTeachingSignIn(classId, "Live QR Attendance Session", true);
+    renderRegister();
+    const expiry = Date.now() + minutes * 60 * 1000;
+    const { data: cloudSession, error } = await supabaseClient.from("attendance_sessions").insert({
+      class_id: cloudClass.id, created_by: currentLecturer.id, attendance_date: date,
+      expires_at: new Date(expiry).toISOString(), is_active: true
+    }).select("id, session_token, expires_at").single();
+    if (error) throw error;
+    activeQrSession = {
+      cloudSessionId: cloudSession.id, token: cloudSession.session_token, classId,
+      className: targetClass.name || getClassName(classId), date,
+      expiresAt: new Date(cloudSession.expires_at).getTime(), ownerId: currentLecturer.staffId
+    };
+    const baseUrl = window.location.href.split("?")[0];
+    const shareUrl = baseUrl + "student.html?mode=checkin&session=" + encodeURIComponent(cloudSession.session_token);
+    $("sessionClassLabel").textContent = activeQrSession.className + " (" + formatDate(date) + ")";
+    $("sessionShareLink").value = shareUrl;
+    $("activeSessionBox").style.display = "flex";
+    $("startQrSessionBtn").style.display = "none";
+    $("stopQrSessionBtn").style.display = "inline-flex";
+    const qrContainer = $("qrcodeContainer"); qrContainer.innerHTML = "";
+    if (typeof QRCode !== "undefined") new QRCode(qrContainer, {
+      text: shareUrl, width: 120, height: 120, colorDark: "#15233d", colorLight: "#ffffff"
     });
-  } else {
-    qrContainer.innerHTML = `<div style="padding:20px;font-weight:700;">CODE: ${sessionToken}</div>`;
+    clearInterval(sessionTimerInterval); updateSessionCountdown();
+    sessionTimerInterval = setInterval(updateSessionCountdown, 1000);
+    toast("Secure student check-in opened for " + minutes + " minutes.");
+  } catch (error) {
+    console.error("Could not start cloud attendance session:", error);
+    toast(error.message || "Could not start attendance. Check Supabase configuration.");
+  } finally {
+    button.disabled = false; button.textContent = "Launch Timed Check-In";
   }
-
-  clearInterval(sessionTimerInterval);
-  updateSessionCountdown();
-  sessionTimerInterval = setInterval(updateSessionCountdown, 1000);
-  toast(`Timed check-in started (${minutes} mins) & lecturer signed in.`);
 }
 
 function updateSessionCountdown() {
@@ -1626,9 +1694,14 @@ function updateSessionCountdown() {
   if (kioskTimer) kioskTimer.textContent = formatted;
 }
 
-function stopQrSession(silent = false) {
+
+async function stopQrSession(silent = false) {
   clearInterval(sessionTimerInterval);
+  const sessionId = activeQrSession?.cloudSessionId;
   activeQrSession = null;
+  if (sessionId) {
+    try { await closeCloudAttendanceSession(sessionId); } catch (error) { console.error(error); }
+  }
   if ($("activeSessionBox")) $("activeSessionBox").style.display = "none";
   if ($("startQrSessionBtn")) $("startQrSessionBtn").style.display = "inline-flex";
   if ($("stopQrSessionBtn")) $("stopQrSessionBtn").style.display = "none";
@@ -1636,7 +1709,7 @@ function stopQrSession(silent = false) {
     $("sessionTimerBadge").textContent = "No active session";
     $("sessionTimerBadge").className = "timer-pill";
   }
-  if (!silent) toast("Check-in session ended.");
+  if (!silent) toast("Student check-in window closed.");
 }
 
 function openStudentKiosk() {
