@@ -2221,7 +2221,6 @@ function bindEvents() {
 
   $("startQrSessionBtn").addEventListener("click", startQrSession);
   $("stopQrSessionBtn").addEventListener("click", () => stopQrSession(false));
-  $("openStudentKioskBtn").addEventListener("click", openStudentKiosk);
   $("studentCheckInForm").addEventListener("submit", handleStudentSelfCheckIn);
   $("copySessionLinkBtn").addEventListener("click", () => {
     navigator.clipboard?.writeText($("sessionShareLink").value);
