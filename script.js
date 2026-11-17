@@ -355,40 +355,39 @@ function recordLecturerTeachingSignIn(classId, topic = "", silent = false) {
   const dateStr = today();
   const timeStr = nowTimeFormatted();
   const ownerId = cls._ownerStaffId || currentLecturer?.staffId || "admin";
-
-  const existingToday = data.teachingLogs.find(
-    l => l.classId === classId && l.date === dateStr
+  const activeToday = data.teachingLogs.find(
+    log => log.classId === classId && log.date === dateStr && log.status === "Signed In · Teaching"
   );
 
-  if (existingToday && silent && existingToday.status === "Signed In · Teaching") return;
-
-  if (existingToday) {
-    existingToday.time = timeStr;
-    if (topic) existingToday.topic = topic;
-    existingToday.timestamp = new Date().toISOString();
-    existingToday.status = "Signed In · Teaching";
-    delete existingToday.endTime;
-    delete existingToday.endedAt;
-  } else {
-    data.teachingLogs.push({
-      id: makeId(),
-      classId,
-      className: cls.name,
-      classCode: cls.code || "",
-      date: dateStr,
-      time: timeStr,
-      topic: topic || "Scheduled Lecture / Practical Session",
-      status: "Signed In · Teaching",
-      timestamp: new Date().toISOString(),
-      _ownerStaffId: ownerId
-    });
+  // QR launch can reuse the lecturer's already-open lesson; a manual sign-in
+  // while active must not inflate the lesson counter with duplicate entries.
+  if (activeToday) {
+    if (silent) return activeToday;
+    toast(`You are already signed in to teach ${cls.name}. Sign out before starting another lesson.`);
+    return activeToday;
   }
+
+  const startedAt = new Date().toISOString();
+  const lessonLog = {
+    id: makeId(),
+    classId,
+    className: cls.name,
+    classCode: cls.code || "",
+    date: dateStr,
+    time: timeStr,
+    topic: topic || "Scheduled Lecture / Practical Session",
+    status: "Signed In · Teaching",
+    timestamp: startedAt,
+    _ownerStaffId: ownerId
+  };
+  data.teachingLogs.push(lessonLog);
 
   if (saveData() && !silent) {
     renderClasses();
     renderDashboard();
     toast(`✓ Signed in to teach ${cls.name} at ${timeStr}`);
   }
+  return lessonLog;
 }
 
 function promptLecturerClassSignIn(classId) {
@@ -1349,25 +1348,30 @@ function renderClasses() {
         .map(classItem => {
           const count = data.students.filter(student => student.classId === classItem.id).length;
           const classLogs = (data.teachingLogs || []).filter(l => l.classId === classItem.id);
-          const signedInToday = classLogs.some(l => l.date === todayStr && l.status === "Signed In · Teaching");
+          const todaysLogs = classLogs.filter(log => log.date === todayStr)
+            .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+          const activeLesson = todaysLogs.find(log => log.status === "Signed In · Teaching");
+          const latestEndedLesson = [...todaysLogs].reverse().find(log => log.status !== "Signed In · Teaching");
+          const signedInToday = Boolean(activeLesson);
 
           const ownerBadge = adminMode && classItem._ownerName
             ? `<div style="font-size:11px;color:#2f6fed;font-weight:600;margin-top:4px;">Lecturer: ${escapeHTML(classItem._ownerName)}</div>`
             : "";
 
-          const teachingStatusBadge = signedInToday
-            ? `<div style="font-size:11px;color:#11835c;font-weight:600;margin-top:4px;">✓ Signed in to teach today (${classLogs.length} total lessons)</div>`
-            : `<div style="font-size:11px;color:#6c7a93;margin-top:4px;">Lessons taught: ${classLogs.length}</div>`;
+          const teachingStatusBadge = activeLesson
+            ? `<div style="font-size:11px;color:#11835c;font-weight:600;margin-top:4px;">✓ Signed in to teach today · ${classLogs.length} total lessons</div>`
+            : latestEndedLesson
+              ? `<div style="font-size:11px;color:#6c7a93;font-weight:600;margin-top:4px;">Class ended at ${escapeHTML(latestEndedLesson.signOutTime || latestEndedLesson.endTime || "—")} · Lessons taught: ${classLogs.length}</div>`
+              : `<div style="font-size:11px;color:#6c7a93;margin-top:4px;">Lessons taught: ${classLogs.length}</div>`;
 
           return `
             <article class="class-card">
               <div class="class-card-top">
                 <span class="class-symbol">▤</span>
                 <div class="class-actions" style="flex-wrap:wrap;justify-content:flex-end;">
-                  <button class="action-btn" style="background:#e9f8f2;color:#11835c;border-color:#bfe8d8;font-weight:600;" data-teach-class="${escapeHTML(classItem.id)}">
-                    ${signedInToday ? "✓ Signed In" : "✓ Sign In to Teach"}
-                  </button>
-                  ${signedInToday ? `<button class="action-btn delete" data-end-teach-class="${escapeHTML(classItem.id)}">End Lecture / Sign Out</button>` : ""}
+                  ${signedInToday
+                    ? `<span class="action-btn" style="background:#e9f8f2;color:#11835c;border-color:#bfe8d8;font-weight:600;">✓ Signed In</span><button class="action-btn delete" data-end-teach-class="${escapeHTML(classItem.id)}">Sign Out</button>`
+                    : `<button class="action-btn" style="background:#e9f8f2;color:#11835c;border-color:#bfe8d8;font-weight:600;" data-teach-class="${escapeHTML(classItem.id)}">✓ Sign In to Teach</button>`}
                   <button class="action-btn enroll" data-enroll-class="${escapeHTML(classItem.id)}">⊞ Student Registration QR</button>
                   <button class="action-btn" data-edit-class="${escapeHTML(classItem.id)}">Edit</button>
                   <button class="action-btn delete" data-delete-class="${escapeHTML(classItem.id)}">Delete</button>
@@ -1555,7 +1559,7 @@ async function closeCloudAttendanceSession(sessionId) {
   const { error } = await supabaseClient.from("attendance_sessions").update({ is_active: false }).eq("id", sessionId);
   if (error) console.error("Could not close cloud attendance session:", error);
 }
-function endTeachingClass(classId) {
+async function endTeachingClass(classId) {
   const cls = data.classes.find(item => item.id === classId);
   if (!cls) return;
   const log = (data.teachingLogs || []).find(item =>
@@ -1563,12 +1567,18 @@ function endTeachingClass(classId) {
   );
   if (!log) { toast("You are not currently signed in to teach this class."); return; }
   if (!confirm("End this lecture and sign out of teaching for " + cls.name + "?")) return;
+
+  const signedOutAt = new Date();
   log.status = "Signed Out · Teaching Ended";
-  log.endTime = nowTimeFormatted();
-  log.endedAt = new Date().toISOString();
-  if (activeQrSession?.classId === classId) stopQrSession(true);
-  saveData(); renderClasses(); renderDashboard();
-  toast("Lecture ended. You have signed out of " + cls.name + ".");
+  log.signOutTime = signedOutAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  log.endTime = log.signOutTime;
+  log.endedAt = signedOutAt.toISOString();
+
+  if (activeQrSession?.classId === classId) await stopQrSession(true);
+  saveData();
+  renderClasses();
+  renderDashboard();
+  toast("Lecture ended at " + log.signOutTime + ". You have signed out of " + cls.name + ".");
 }
 
 function saveClass(event) {
@@ -1658,6 +1668,13 @@ async function startQrSession() {
     }
     recordLecturerTeachingSignIn(classId, "Live QR Attendance Session", true);
     renderRegister();
+    // Invalidate every earlier QR session for this class before issuing a new token.
+    const { error: staleSessionError } = await supabaseClient.from("attendance_sessions")
+      .update({ is_active: false })
+      .eq("class_id", cloudClass.id)
+      .eq("is_active", true);
+    if (staleSessionError) throw staleSessionError;
+
     const expiry = Date.now() + minutes * 60 * 1000;
     const { data: cloudSession, error } = await supabaseClient.from("attendance_sessions").insert({
       class_id: cloudClass.id, created_by: currentLecturer.id, attendance_date: date,
@@ -1705,6 +1722,7 @@ function updateSessionCountdown() {
     $("kioskActiveBody").style.display = "none";
     $("kioskExpiredBody").style.display = "block";
     activeQrSession.expired = true;
+    closeCloudAttendanceSession(activeQrSession.cloudSessionId);
     toast("Student self-check-in window has closed.");
     return;
   }
