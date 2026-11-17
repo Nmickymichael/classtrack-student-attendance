@@ -1995,9 +1995,29 @@ function saveRegister() {
    REPORTS & OFFICIAL PRINT SHEET
    ========================================= */
 
+function getReportDateBounds() {
+  const period = $("reportPeriod")?.value || "all";
+  if (period === "day") {
+    const day = $("reportDay").value;
+    return { from: day, to: day, label: day ? formatDate(day) : "Select a day" };
+  }
+  if (period === "month") {
+    const month = $("reportMonth").value;
+    if (!month) return { from: "", to: "", label: "Select a month" };
+    const [year, monthNumber] = month.split("-").map(Number);
+    const lastDay = new Date(year, monthNumber, 0).getDate();
+    return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, "0")}`, label: new Date(year, monthNumber - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" }) };
+  }
+  if (period === "custom") {
+    const from = $("reportFrom").value;
+    const to = $("reportTo").value;
+    return { from, to, label: `${from ? formatDate(from) : "Beginning"} – ${to ? formatDate(to) : "Today"}` };
+  }
+  return { from: "", to: "", label: "All Time (Since Day 1)" };
+}
+
 function getFilteredReports() {
-  const from = $("reportFrom").value;
-  const to = $("reportTo").value;
+  const { from, to } = getReportDateBounds();
   const classId = $("reportClass").value;
   const status = $("reportStatus").value;
 
@@ -2014,12 +2034,70 @@ function getFilteredReports() {
     );
 }
 
+function updateReportPeriodControls() {
+  const period = $("reportPeriod").value;
+  $("reportDayWrap").style.display = period === "day" ? "" : "none";
+  $("reportMonthWrap").style.display = period === "month" ? "" : "none";
+  $("reportFromWrap").style.display = period === "custom" ? "" : "none";
+  $("reportToWrap").style.display = period === "custom" ? "" : "none";
+}
+
+function renderCumulativeAttendanceSummary() {
+  const { from, to, label } = getReportDateBounds();
+  const classFilter = $("reportClass").value;
+  const classes = data.classes.filter(cls => !classFilter || cls.id === classFilter);
+  const logs = (data.teachingLogs || []).filter(log =>
+    (!classFilter || log.classId === classFilter) &&
+    (!from || (log.date || "").slice(0, 10) >= from) &&
+    (!to || (log.date || "").slice(0, 10) <= to)
+  );
+  const records = data.attendance.filter(record =>
+    (!classFilter || record.classId === classFilter) &&
+    (!from || record.date >= from) &&
+    (!to || record.date <= to)
+  );
+
+  $("cumulativeSummaryDescription").textContent =
+    `${label} · ${logs.length} lesson sign-in record${logs.length === 1 ? "" : "s"} across ${classes.length} class${classes.length === 1 ? "" : "es"}`;
+
+  const rows = [];
+  classes.forEach(cls => {
+    const classLogs = logs.filter(log => log.classId === cls.id);
+    const classRecords = records.filter(record => record.classId === cls.id);
+    const students = data.students.filter(student => student.classId === cls.id);
+
+    students.forEach(student => {
+      const studentRecords = classRecords.filter(record => record.studentId === student.id);
+      const attended = studentRecords.filter(record => record.status === "Present" || record.status === "Late").length;
+      const missed = studentRecords.filter(record => record.status === "Absent").length;
+      const excused = studentRecords.filter(record => record.status === "Excused").length;
+      const lessonsTaught = classLogs.length;
+      const percentage = lessonsTaught ? Math.min(100, Math.round((attended / lessonsTaught) * 100)) : 0;
+
+      rows.push(`<tr>
+        <td>${escapeHTML(getClassName(cls.id))}</td>
+        <td>${escapeHTML(student.name)}</td>
+        <td>${escapeHTML(student.admission || "—")}</td>
+        <td>${lessonsTaught}</td>
+        <td>${attended}</td>
+        <td>${missed}</td>
+        <td><strong>${lessonsTaught ? percentage + "%" : "—"}</strong></td>
+      </tr>`);
+    });
+  });
+
+  $("cumulativeAttendanceTable").innerHTML = rows.length
+    ? rows.join("")
+    : `<tr><td colspan="7" class="table-empty">No enrolled students found for this selection.</td></tr>`;
+}
+
 function renderReports() {
   populateClassSelects();
+  updateReportPeriodControls();
   currentReport = getFilteredReports();
 
   const total = currentReport.length;
-  const present = currentReport.filter(record => record.status === "Present").length;
+  const present = currentReport.filter(record => record.status === "Present" || record.status === "Late").length;
   const absent = currentReport.filter(record => record.status === "Absent").length;
   const rate = total ? Math.round((present / total) * 100) : 0;
 
@@ -2044,6 +2122,8 @@ function renderReports() {
         `;
       }).join("")
     : `<tr><td colspan="6" class="table-empty">No matching attendance records.</td></tr>`;
+
+  renderCumulativeAttendanceSummary();
 }
 
 function printOfficialRegister() {
@@ -2265,6 +2345,13 @@ function bindEvents() {
   $("attendanceClass").addEventListener("change", renderRegister);
   $("attendanceDate").addEventListener("change", renderRegister);
 
+  $("reportPeriod").addEventListener("change", () => {
+    updateReportPeriodControls();
+    renderReports();
+  });
+  ["reportDay", "reportMonth", "reportFrom", "reportTo", "reportClass", "reportStatus"].forEach(id => {
+    $(id).addEventListener("change", renderReports);
+  });
   $("filterReportsBtn").addEventListener("click", renderReports);
   $("exportReportBtn").addEventListener("click", exportReport);
   $("printReportBtn").addEventListener("click", printOfficialRegister);
