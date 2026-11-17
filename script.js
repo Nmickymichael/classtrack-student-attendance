@@ -1942,6 +1942,69 @@ async function startQrSession() {
   }
 }
 
+async function finalizeQrSessionAttendance(session, options = {}) {
+  if (!session?.classId || !session?.date) return 0;
+  if (session.finalizing) return 0;
+  session.finalizing = true;
+
+  try {
+    const roster = data.students.filter(student => student.classId === session.classId);
+    if (!roster.length) return 0;
+
+    const existingByStudent = new Map(
+      data.attendance
+        .filter(record => record.classId === session.classId && record.date === session.date)
+        .map(record => [record.studentId, record])
+    );
+    const registerMatchesSession =
+      $("attendanceClass")?.value === session.classId &&
+      $("attendanceDate")?.value === session.date;
+    const registerRows = registerMatchesSession
+      ? [...($("registerArea")?.querySelectorAll("[data-register-row]") || [])]
+      : [];
+    const rowByStudent = new Map(registerRows.map(row => [row.dataset.registerRow, row]));
+    const ownerStaffId = session.ownerId || currentLecturer?.staffId || "admin";
+    let autoAbsentCount = 0;
+
+    const pendingRecords = roster.map(student => {
+      const existing = existingByStudent.get(student.id);
+      const row = rowByStudent.get(student.id);
+      const selectedStatus = row?.querySelector(".status-option.selected")?.dataset.status;
+      const status = selectedStatus || existing?.status || "Absent";
+      if (!selectedStatus && !existing) autoAbsentCount++;
+
+      return {
+        id: existing?.id || makeId(),
+        studentId: student.id,
+        classId: session.classId,
+        date: session.date,
+        status,
+        remarks: row?.querySelector("[data-remarks]")?.value.trim() ||
+          existing?.remarks ||
+          (status === "Absent" && !existing ? "Automatically marked absent when attendance closed" : ""),
+        createdAt: existing?.createdAt || new Date().toISOString(),
+        _ownerStaffId: ownerStaffId
+      };
+    });
+
+    const saved = await saveAttendanceBatchToCloud(pendingRecords);
+    saved.forEach(record => {
+      const index = data.attendance.findIndex(item => item.id === record.id);
+      if (index >= 0) data.attendance[index] = record;
+      else data.attendance.push(record);
+    });
+    saveData();
+    renderDashboard();
+    if (registerMatchesSession) renderRegister();
+    return autoAbsentCount;
+  } catch (error) {
+    console.error("Could not finalize session attendance:", error);
+    throw error;
+  } finally {
+    session.finalizing = false;
+  }
+}
+
 function updateSessionCountdown() {
   if (!activeQrSession) return;
   const remainingMs = activeQrSession.expiresAt - Date.now();
@@ -1956,8 +2019,17 @@ function updateSessionCountdown() {
     $("kioskActiveBody").style.display = "none";
     $("kioskExpiredBody").style.display = "block";
     activeQrSession.expired = true;
-    closeCloudAttendanceSession(activeQrSession.cloudSessionId);
-    toast("Student self-check-in window has closed.");
+
+    const expiredSession = activeQrSession;
+    (async () => {
+      try {
+        const absentCount = await finalizeQrSessionAttendance(expiredSession);
+        await closeCloudAttendanceSession(expiredSession.cloudSessionId);
+        toast(`Check-in window expired. ${absentCount} unmarked student(s) automatically marked Absent.`);
+      } catch (error) {
+        toast("The session expired, but attendance finalization failed: " + (error.message || "Check Supabase permissions."));
+      }
+    })();
     return;
   }
 
@@ -1974,7 +2046,18 @@ function updateSessionCountdown() {
 
 async function stopQrSession(silent = false) {
   clearInterval(sessionTimerInterval);
-  const sessionId = activeQrSession?.cloudSessionId;
+  const session = activeQrSession;
+  const sessionId = session?.cloudSessionId;
+  if (session) {
+    try {
+      const absentCount = await finalizeQrSessionAttendance(session);
+      if (!silent) toast(`Check-in window closed. ${absentCount} unmarked student(s) automatically marked Absent.`);
+    } catch (error) {
+      console.error("Attendance finalization failed while closing session:", error);
+      toast("Could not finalize attendance: " + (error.message || "Check Supabase permissions."));
+      return;
+    }
+  }
   activeQrSession = null;
   if (sessionId) {
     try { await closeCloudAttendanceSession(sessionId); } catch (error) { console.error(error); }
@@ -1986,7 +2069,6 @@ async function stopQrSession(silent = false) {
     $("sessionTimerBadge").textContent = "No active session";
     $("sessionTimerBadge").className = "timer-pill";
   }
-  if (!silent) toast("Student check-in window closed.");
 }
 
 function openStudentKiosk() {
@@ -2202,21 +2284,15 @@ async function saveRegister() {
     return;
   }
 
-  const selectedRows = rows.filter(row =>
-    Boolean(row.querySelector(".status-option.selected"))
-  );
-  const unmarkedCount = rows.length - selectedRows.length;
-
-  if (!selectedRows.length) {
-    toast("No attendance statuses selected. Mark at least one student before saving.");
-    return;
-  }
+  const unmarkedCount = rows.filter(row =>
+    !row.querySelector(".status-option.selected")
+  ).length;
 
   const targetClass = data.classes.find(c => c.id === classId);
   const ownerStaffId = targetClass?._ownerStaffId || currentLecturer?.staffId || "admin";
-  const pendingRecords = selectedRows.map(row => {
+  const pendingRecords = rows.map(row => {
     const studentId = row.dataset.registerRow;
-    const status = row.querySelector(".status-option.selected").dataset.status;
+    const status = row.querySelector(".status-option.selected")?.dataset.status || "Absent";
     const remarks = row.querySelector("[data-remarks]")?.value.trim() || "";
     const existing = data.attendance.find(
       record => record.studentId === studentId && record.classId === classId && record.date === date
@@ -2239,7 +2315,7 @@ async function saveRegister() {
     });
     saveData();
     if (unmarkedCount > 0) {
-      toast(`${cloudRecords.length} attendance record(s) saved. ${unmarkedCount} student(s) remain unmarked and were not saved.`);
+      toast(`Attendance register saved. ${unmarkedCount} unmarked student(s) automatically marked Absent.`);
     } else {
       toast("Attendance register saved and synced to Supabase.");
     }
