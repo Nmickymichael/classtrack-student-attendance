@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Student Class Attendance Management System for TVET colleges">
+  <title>ClassTrack | Attendance Management</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+
+  <!-- STANDALONE MOBILE STUDENT PORTAL (Triggered via QR URL Params on Hosted Phones) -->
+  <div class="login-screen" id="mobileStudentPortal" style="display:none;">
+    <div class="login-card">
+      <div class="brand-mark login-logo">CT</div>
+      <p class="eyebrow" id="portalEyebrow" style="color:#15966b;">STUDENT PORTAL</p>
+      <h1 id="portalTitle">Class Check-In</h1>
+      <p class="muted" id="portalSubtitle">Course Name</p>
+
+      <div class="kiosk-timer-bar" id="portalTimerBar" style="margin-top:16px;">
+        <span>Time Remaining:</span>
+        <strong id="portalCountdown">05:00</strong>
+      </div>
+
+      <!-- PHONE ENROLLMENT FORM -->
+      <form id="phoneEnrollForm" style="display:none;">
+        <label>Full Name<input type="text" id="phoneRegName" placeholder="e.g. Jane Wanjiku" required></label>
+        <label>Admission Number<input type="text" id="phoneRegAdm" placeholder="e.g. T1211/551766/2023" required></label>
+        <label>Phone Number <span class="optional">(optional)</span><input type="text" id="phoneRegPhone" placeholder="e.g. 07XX XXX XXX"></label>
+        <p class="kiosk-feedback" id="phoneEnrollFeedback"></p>
+        <button type="submit" class="btn btn-primary btn-full">Complete Day 1 Registration</button>
+      </form>
+
+      <!-- PHONE CHECK-IN FORM -->
+      <form id="phoneCheckInForm" style="display:none;">
+        <label>Admission Number<input type="text" id="phoneCheckAdm" placeholder="Enter your Admission No." required></label>
+        <p class="kiosk-feedback" id="phoneCheckFeedback"></p>
+        <button type="submit" class="btn btn-primary btn-full">✓ Mark Me Present</button>
+      </form>
+
+      <div id="portalExpiredBox" style="display:none; padding:20px 0;">
+        <div class="empty-symbol" style="background:#fff0f0; color:#c43e49;">!</div>
+        <h3>Window Closed</h3>
+        <p class="muted">The allocated time window for this QR code has expired.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- LECTURER LOGIN & SIGN UP GATE -->
+  <div class="login-screen" id="loginScreen">
+    <div class="login-card">
+      <div class="brand-mark login-logo">CT</div>
+      <h1>ClassTrack</h1>
+      <p class="muted" id="authSubtitle">Lecturer &amp; Administrator Sign In</p>
+
+      <!-- SIGN IN FORM -->
+      <form id="loginForm">
+        <label>
+          Staff ID / Email
+          <input type="text" id="loginStaffId" placeholder="e.g. LEC/001 or default: admin" required>
+        </label>
+        <label>
+          Access PIN / Password
+          <input type="password" id="loginPin" placeholder="Enter your PIN / Password" maxlength="20" required>
+        </label>
+        <p class="login-error" id="loginError"></p>
+        <button type="submit" class="btn btn-primary btn-full">Unlock Workspace</button>
+        <p class="auth-switch">
+          New lecturer? <button type="button" class="link-btn" id="showSignUpBtn">Create an account</button>
+        </p>
+      </form>
+
+      <!-- SIGN UP FORM -->
+      <form id="signUpForm" style="display:none;">
+        <label>
+          Full Name
+          <input type="text" id="regName" placeholder="e.g. Dr. Sarah Mwangi" required>
+        </label>
+        <label>
+          Staff ID or Email
+          <input type="text" id="regStaffId" placeholder="e.g. LEC/2026/04" required>
+        </label>
+        <label>
+          Department
+          <input type="text" id="regDept" placeholder="e.g. Computing & Informatics" required>
+        </label>
+        <label>
+          Create Access PIN / Password
+          <input type="password" id="regPin" placeholder="Choose a PIN (min 4 chars)" minlength="4" maxlength="20" required>
+        </label>
+        <p class="login-error" id="signUpError"></p>
+        <button type="submit" class="btn btn-primary btn-full">Register &amp; Enter Workspace</button>
+        <p class="auth-switch">
+          Already registered? <button type="button" class="link-btn" id="showSignInBtn">Sign in here</button>
+        </p>
+      </form>
+    </div>
+  </div>
+
+  <!-- MAIN APPLICATION SHELL -->
+  <div class="app-shell" id="appShell" style="display:none;">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">CT</div>
+        <div>
+          <strong>ClassTrack</strong>
+          <span>ATTENDANCE SYSTEM</span>
+        </div>
+      </div>
+
+      <p class="sidebar-label">WORKSPACE</p>
+      <nav class="nav-menu">
+        <button class="nav-link active" data-view="dashboard">▦ Dashboard</button>
+        <button class="nav-link" data-view="students">♙ Students</button>
+        <button class="nav-link" data-view="classes">▤ Classes</button>
+        <button class="nav-link" data-view="attendance">✓ Take attendance</button>
+        <button class="nav-link" data-view="reports">▥ Reports</button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="storage-note">
+          <span class="status-dot"></span>
+          <div>
+            <strong>Local storage active</strong>
+            <small>Saved in this browser</small>
+          </div>
+        </div>
+        <button class="nav-link" data-view="settings">⚙ Settings &amp; backup</button>
+        <button class="nav-link logout-btn" id="logoutBtn">⎋ Lock / Logout</button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu">☰</button>
+        <div class="breadcrumb">
+          <span>Workspace</span><b>/</b><strong id="pageName">Dashboard</strong>
+        </div>
+        <div class="topbar-right">
+          <span id="todayLabel"></span>
+          <span class="lecturer-badge" id="lecturerBadge">Lecturer</span>
+          <div class="avatar" id="userAvatar">L</div>
+        </div>
+      </header>
+
+      <div class="content">
+        <!-- DASHBOARD -->
+        <section class="view active" id="view-dashboard">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">OVERVIEW</p>
+              <h1>Dashboard</h1>
+              <p class="muted">Monitor student records, attendance rates, and daily registers.</p>
+            </div>
+            <button class="btn btn-primary" data-go="attendance">＋ Take attendance</button>
+          </div>
+
+          <div class="stats-grid">
+            <article class="stat-card">
+              <div class="stat-top"><span>Total students</span><span class="stat-icon blue">♙</span></div>
+              <strong id="statStudents">0</strong>
+              <small>Registered in the system</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Classes / groups</span><span class="stat-icon violet">▤</span></div>
+              <strong id="statClasses">0</strong>
+              <small>Registered class groups</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Present today</span><span class="stat-icon green">✓</span></div>
+              <strong id="statPresent">0</strong>
+              <small id="presentSub">Today's attendance</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>At-risk (&lt;75%)</span><span class="stat-icon orange">!</span></div>
+              <strong id="statAtRisk">0</strong>
+              <small>Below minimum threshold</small>
+            </article>
+          </div>
+
+          <div class="dashboard-grid">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Today's attendance</h2>
+                  <p class="muted">Summary of recorded attendance</p>
+                </div>
+                <span class="date-chip" id="dashboardDate"></span>
+              </div>
+
+              <div class="attendance-summary">
+                <div class="donut" id="attendanceDonut">
+                  <div><strong id="attendanceRate">0%</strong><small>Present</small></div>
+                </div>
+                <div class="legend">
+                  <div><i class="legend-dot present-dot"></i><span>Present</span><strong id="legendPresent">0</strong></div>
+                  <div><i class="legend-dot absent-dot"></i><span>Absent</span><strong id="legendAbsent">0</strong></div>
+                  <div><i class="legend-dot late-dot"></i><span>Late</span><strong id="legendLate">0</strong></div>
+                  <div><i class="legend-dot excused-dot"></i><span>Excused</span><strong id="legendExcused">0</strong></div>
+                </div>
+              </div>
+              <div class="empty-inline" id="dashboardEmpty">No attendance recorded today.</div>
+            </article>
+
+            <!-- AT-RISK STUDENTS ALERT PANEL -->
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Low attendance alerts (&lt;75%)</h2>
+                  <p class="muted">Students requiring academic follow-up</p>
+                </div>
+                <span class="badge-danger" id="atRiskBadge">0 Flagged</span>
+              </div>
+              <div class="risk-list" id="atRiskList">
+                <div class="empty-inline">All registered students meet the 75% attendance threshold.</div>
+              </div>
+            </article>
+          </div>
+
+          <article class="panel recent-panel">
+            <div class="panel-heading">
+              <div><h2>Recent attendance activity</h2><p class="muted">Latest saved records</p></div>
+              <button class="btn btn-light btn-small" data-go="reports">View reports</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>DATE</th><th>STUDENT</th><th>ADMISSION NO.</th><th>CLASS</th><th>STATUS</th></tr></thead>
+                <tbody id="recentAttendance"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <!-- STUDENTS -->
+        <section class="view" id="view-students">
+          <div class="page-heading">
+            <div><p class="eyebrow">RECORDS</p><h1>Students</h1><p class="muted">View self-enrolled students or manually add records.</p></div>
+            <button class="btn btn-primary" id="addStudentBtn">＋ Add student</button>
+          </div>
+          <div class="toolbar">
+            <div class="search-wrap"><span>⌕</span><input id="studentSearch" type="search" placeholder="Search name or admission number..."></div>
+            <select id="studentClassFilter"><option value="">All classes</option></select>
+            <span class="result-count" id="studentCount">0 students</span>
+          </div>
+          <article class="panel table-panel">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>STUDENT</th><th>ADMISSION NO.</th><th>CLASS</th><th>PHONE</th><th>ATTENDANCE %</th><th>ACTIONS</th></tr></thead>
+                <tbody id="studentsTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <!-- CLASSES (WITH DAY 1 SELF-ENROLLMENT QR) -->
+        <section class="view" id="view-classes">
+          <div class="page-heading">
+            <div><p class="eyebrow">ORGANISATION &amp; DAY 1 ONBOARDING</p><h1>Classes</h1><p class="muted">Create classes and share Day 1 Student Self-Registration QR codes.</p></div>
+            <button class="btn btn-primary" id="addClassBtn">＋ Add class</button>
+          </div>
+          <div class="class-grid" id="classGrid"></div>
+        </section>
+
+        <!-- ATTENDANCE -->
+        <section class="view" id="view-attendance">
+          <div class="page-heading">
+            <div><p class="eyebrow">DAILY REGISTER</p><h1>Take attendance</h1><p class="muted">Launch a timed QR/link check-in for enrolled students or mark manually.</p></div>
+            <div class="save-indicator"><span class="status-dot"></span>Saved in this browser</div>
+          </div>
+
+          <!-- TIMED STUDENT CHECK-IN SESSION PANEL -->
+          <article class="panel qr-session-panel">
+            <div class="panel-heading" style="margin-bottom:12px;">
+              <div>
+                <h2>Lesson Attendance QR &amp; Link (Enrolled Students Only)</h2>
+                <p class="muted">Students who enrolled on Day 1 scan this code and enter their Admission Number.</p>
+              </div>
+              <span class="timer-pill" id="sessionTimerBadge">No active session</span>
+            </div>
+
+            <div class="qr-controls">
+              <label>Time Window
+                <select id="sessionDuration">
+                  <option value="2">2 Minutes (Quick Demo)</option>
+                  <option value="5" selected>5 Minutes</option>
+                  <option value="10">10 Minutes</option>
+                  <option value="15">15 Minutes</option>
+                </select>
+              </label>
+              <button class="btn btn-primary" id="startQrSessionBtn">Launch Timed Check-In</button>
+              <button class="btn btn-danger" id="stopQrSessionBtn" style="display:none;">End Window Now</button>
+            </div>
+
+            <div class="active-session-box" id="activeSessionBox" style="display:none;">
+              <div id="qrcodeContainer" class="qr-box"></div>
+              <div class="session-details">
+                <span class="eyebrow" style="color:#15966b;">LIVE CHECK-IN WINDOW OPEN</span>
+                <h3 id="sessionClassLabel">Class Name</h3>
+                <p class="muted">Students scan this QR code or open the check-in kiosk below before the timer expires.</p>
+                <div class="session-link-row">
+                  <input type="text" id="sessionShareLink" readonly>
+                  <button type="button" class="btn btn-light btn-small" id="copySessionLinkBtn">Copy Link</button>
+                  <button type="button" class="btn btn-primary btn-small" id="openStudentKioskBtn">Open Student Check-In View ↗</button>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- MANUAL & LIVE REGISTER PANEL -->
+          <article class="panel attendance-panel">
+            <div class="attendance-controls">
+              <label>Class / group
+                <select id="attendanceClass"><option value="">Select a class</option></select>
+              </label>
+              <label>Attendance date
+                <input type="date" id="attendanceDate">
+              </label>
+              <button class="btn btn-light" id="loadRegisterBtn">Load register</button>
+            </div>
+            <div id="registerArea">
+              <div class="empty-state">
+                <div class="empty-symbol">✓</div>
+                <h3>Ready to take attendance?</h3>
+                <p>Select a class and date above to load its student register.</p>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <!-- REPORTS -->
+        <section class="view" id="view-reports">
+          <div class="page-heading no-print">
+            <div><p class="eyebrow">ANALYTICS</p><h1>Attendance reports</h1><p class="muted">Review attendance records, print official sheets, or export CSV.</p></div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="btn btn-light" id="printReportBtn">🖨 Print Register</button>
+              <button class="btn btn-primary" id="exportReportBtn">↓ Export CSV</button>
+            </div>
+          </div>
+
+          <div class="print-header">
+            <h1 id="printInstitutionTitle">TVET INSTITUTION ATTENDANCE REGISTER</h1>
+            <p id="printDepartmentTitle">Official Class Attendance Sheet</p>
+            <div class="print-meta-row">
+              <span id="printFilterSummary">All Records</span>
+              <span id="printGeneratedDate"></span>
+            </div>
+          </div>
+
+          <div class="toolbar report-toolbar no-print">
+            <label>From<input type="date" id="reportFrom"></label>
+            <label>To<input type="date" id="reportTo"></label>
+            <label>Class<select id="reportClass"><option value="">All classes</option></select></label>
+            <label>Status
+              <select id="reportStatus">
+                <option value="">All statuses</option>
+                <option>Present</option><option>Absent</option><option>Late</option><option>Excused</option>
+              </select>
+            </label>
+            <button class="btn btn-light" id="filterReportsBtn">Apply filters</button>
+          </div>
+
+          <div class="stats-grid report-stats">
+            <article class="stat-card"><div class="stat-top"><span>Records shown</span><span class="stat-icon blue">▤</span></div><strong id="reportTotal">0</strong><small>Matching records</small></article>
+            <article class="stat-card"><div class="stat-top"><span>Present</span><span class="stat-icon green">✓</span></div><strong id="reportPresent">0</strong><small>Present records</small></article>
+            <article class="stat-card"><div class="stat-top"><span>Absent</span><span class="stat-icon orange">!</span></div><strong id="reportAbsent">0</strong><small>Absent records</small></article>
+            <article class="stat-card"><div class="stat-top"><span>Attendance rate</span><span class="stat-icon violet">％</span></div><strong id="reportRate">0%</strong><small>Present out of all records</small></article>
+          </div>
+
+          <article class="panel table-panel">
+            <div class="panel-heading no-print">
+              <div><h2>Attendance records</h2><p class="muted" id="reportDescription">All saved attendance records</p></div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>DATE</th><th>STUDENT</th><th>ADMISSION NO.</th><th>CLASS</th><th>STATUS</th><th>REMARKS</th></tr></thead>
+                <tbody id="reportsTable"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <div class="print-signatures">
+            <div>
+              <div class="sig-line"></div>
+              <strong>Lecturer / Trainer Signature</strong>
+              <small id="printLecturerSign">Name &amp; Date</small>
+            </div>
+            <div>
+              <div class="sig-line"></div>
+              <strong>Head of Department (HOD)</strong>
+              <small>Official Stamp &amp; Date</small>
+            </div>
+          </div>
+        </section>
+
+        <!-- SETTINGS -->
+        <section class="view" id="view-settings">
+          <div class="page-heading">
+            <div><p class="eyebrow">SYSTEM PREFERENCES</p><h1>Settings &amp; backup</h1><p class="muted">Configure institution headers, security PIN, and data backups.</p></div>
+          </div>
+
+          <div class="settings-grid">
+            <article class="panel settings-card">
+              <h2>Institution &amp; Security details</h2>
+              <p class="muted">Appears on printed registers and secures your workspace login.</p>
+              <label>Institution / college name<input id="institutionName" placeholder="e.g. University of Embu TVET Institute"></label>
+              <label>Department / section<input id="departmentName" placeholder="e.g. Computing & Informatics Department"></label>
+              <label>Admin Security Password / PIN<input id="settingsPin" type="password" maxlength="20" placeholder="Enter secure password"></label>
+              <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
+            </article>
+
+            <article class="panel settings-card">
+              <h2>Data backup</h2>
+              <p class="muted">Download a backup regularly so that you can restore your records later.</p>
+              <div class="backup-actions">
+                <button class="btn btn-light" id="backupBtn">↓ Download full backup</button>
+                <label class="btn btn-light file-button">↑ Restore backup
+                  <input type="file" id="restoreInput" accept=".json,application/json">
+                </label>
+              </div>
+              <div class="notice">Important: records are stored in this browser, not in a central college database. Clearing browser data or changing devices may remove access to these records. Keep backup copies safely.</div>
+            </article>
+
+            <article class="panel settings-card danger-card">
+              <h2>Clear local records</h2>
+              <p class="muted">Permanently removes all students, classes and attendance records stored by this application in this browser.</p>
+              <button class="btn btn-danger" id="clearDataBtn">Clear all application data</button>
+            </article>
+          </div>
+          <p class="version-note">ClassTrack v3.4 · HTML, CSS and JavaScript</p>
+        </section>
+      </div>
+
+      <footer class="footer no-print">ClassTrack <span>•</span> Student Class Attendance Management System</footer>
+    </main>
+  </div>
+
+  <!-- STUDENT FORM MODAL -->
+  <dialog id="studentDialog" class="modal">
+    <form id="studentForm">
+      <div class="modal-heading">
+        <div><p class="eyebrow">STUDENT RECORD</p><h2 id="studentDialogTitle">Add student</h2></div>
+        <button type="button" class="icon-button" data-close="studentDialog">×</button>
+      </div>
+      <input type="hidden" id="studentId">
+      <label>Full name<input id="studentName" required maxlength="100" placeholder="e.g. Jane Wanjiku"></label>
+      <div class="form-row">
+        <label>Admission number<input id="studentAdmission" required maxlength="40" placeholder="e.g. TVET/ICT/001"></label>
+        <label>Class / group<select id="studentClass" required><option value="">Select class</option></select></label>
+      </div>
+      <label>Phone number <span class="optional">(optional)</span><input id="studentPhone" maxlength="25" placeholder="e.g. 07XX XXX XXX"></label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-light" data-close="studentDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save student</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- CLASS FORM MODAL -->
+  <dialog id="classDialog" class="modal">
+    <form id="classForm">
+      <div class="modal-heading">
+        <div><p class="eyebrow">CLASS SETUP</p><h2 id="classDialogTitle">Add class</h2></div>
+        <button type="button" class="icon-button" data-close="classDialog">×</button>
+      </div>
+      <input type="hidden" id="classId">
+      <label>Class / course name<input id="className" required maxlength="100" placeholder="e.g. Diploma in ICT - Year 1"></label>
+      <label>Class code <span class="optional">(optional)</span><input id="classCode" maxlength="30" placeholder="e.g. DICT-Y1"></label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-light" data-close="classDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save class</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- DAY 1 STUDENT SELF-ENROLLMENT QR & KIOSK MODAL -->
+  <dialog id="enrollQrDialog" class="modal">
+    <form id="selfEnrollForm">
+      <div class="modal-heading">
+        <div>
+          <p class="eyebrow" style="color:#4169e1;">DAY 1 CLASS ONBOARDING</p>
+          <h2 id="enrollModalClassName">Student Self-Registration</h2>
+        </div>
+        <button type="button" class="icon-button" data-close="enrollQrDialog">×</button>
+      </div>
+
+      <div class="enroll-qr-banner">
+        <div id="enrollQrBox" class="qr-box"></div>
+        <div>
+          <strong>Scan to Self-Register</strong>
+          <p class="muted" style="margin:4px 0 8px;">Students scan this QR code on Day 1 to enroll their details into this class roster.</p>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <input type="text" id="enrollShareLink" readonly style="height:32px; font-size:10px; background:#f8fafd; flex:1; min-width:160px;">
+            <button type="button" class="btn btn-light btn-small" id="copyEnrollLinkBtn">Copy Link</button>
+          </div>
+        </div>
+      </div>
+
+      <hr style="border:0; border-top:1px solid #eef1f5; margin:2px 0;">
+      <p class="muted"><strong>Live Student Onboarding Form (Test or Kiosk Mode):</strong></p>
+      <input type="hidden" id="enrollTargetClassId">
+      <label>Full Name<input type="text" id="selfRegName" placeholder="e.g. Brian Omondi" required></label>
+      <div class="form-row">
+        <label>Admission Number<input type="text" id="selfRegAdm" placeholder="e.g. T1211/551800/2023" required></label>
+        <label>Phone Number <span class="optional">(optional)</span><input type="text" id="selfRegPhone" placeholder="e.g. 0712 345 678"></label>
+      </div>
+      <div id="selfEnrollFeedback" class="kiosk-feedback"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-light" data-close="enrollQrDialog">Done</button>
+        <button type="submit" class="btn btn-primary">＋ Register Student to Class</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- LESSON STUDENT SELF-CHECK-IN KIOSK MODAL -->
+  <dialog id="studentKioskDialog" class="modal kiosk-modal">
+    <form id="studentCheckInForm">
+      <div class="modal-heading">
+        <div>
+          <p class="eyebrow" style="color:#15966b;">LESSON ATTENDANCE CHECK-IN</p>
+          <h2 id="kioskClassName">Class Attendance</h2>
+        </div>
+        <button type="button" class="icon-button" data-close="studentKioskDialog">×</button>
+      </div>
+
+      <div class="kiosk-timer-bar">
+        <span>Time Remaining:</span>
+        <strong id="kioskCountdown">05:00</strong>
+      </div>
+
+      <div id="kioskActiveBody">
+        <p class="muted" style="margin-bottom:14px;">Already enrolled on Day 1? Enter your Admission Number below to mark yourself <strong>Present</strong>.</p>
+        <label>
+          Admission Number
+          <input type="text" id="kioskAdmissionInput" placeholder="e.g. T1211/551766/2023" required autocomplete="off">
+        </label>
+        <div id="kioskFeedback" class="kiosk-feedback"></div>
+        <div class="modal-actions" style="margin-top:16px;">
+          <button type="button" class="btn btn-light" data-close="studentKioskDialog">Close</button>
+          <button type="submit" class="btn btn-primary">✓ Check In Present</button>
+        </div>
+      </div>
+
+      <div id="kioskExpiredBody" style="display:none; text-align:center; padding:20px 0;">
+        <div class="empty-symbol" style="background:#fff0f0; color:#c43e49;">!</div>
+        <h3>Attendance Window Closed</h3>
+        <p class="muted">The allocated time frame for self-check-in has expired. Please speak to your lecturer.</p>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="script.js"></script>
+</body>
+</html>

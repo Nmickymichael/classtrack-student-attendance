@@ -1,0 +1,2115 @@
+"use strict";
+
+/* =========================================
+   CLASSTRACK v3.4 - SECURE ADMIN PASSWORD + LECTURER CREDENTIAL RECOVERY
+   Admin Default PIN: 'admin@2026' (Admin-only change)
+   Lecturer Recovery: Admin 'Reset PIN' Action + Self-Service Name/Staff ID Verification
+   ========================================= */
+
+const LECTURERS_KEY = "classtrack_lecturers_registry";
+const LEGACY_STORAGE_KEY = "classtrack_attendance_v1";
+const SESSION_AUTH_KEY = "classtrack_auth_session";
+const DEFAULT_ADMIN_PIN = "admin@2026";
+
+const $ = (id) => document.getElementById(id);
+
+const today = () => {
+  const d = new Date();
+  return [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, "0"),
+    String(d.getDate()).padStart(2, "0")
+  ].join("-");
+};
+
+const nowTimeFormatted = () =>
+  new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+const makeId = () => crypto.randomUUID
+  ? crypto.randomUUID()
+  : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const isAdminUser = (user) =>
+  String(user?.staffId || "").trim().toLowerCase() === "admin";
+
+const getWorkspaceKey = (staffId) =>
+  `classtrack_workspace_${String(staffId || "admin").trim().toLowerCase()}`;
+
+const emptyWorkspace = (lecturer = {}) => ({
+  students: [],
+  classes: [],
+  attendance: [],
+  teachingLogs: [],
+  settings: {
+    institution: "University of Embu TVET Institute",
+    department: lecturer.department || "Computing & Informatics Department",
+    pin: lecturer.pin || (isAdminUser(lecturer) ? DEFAULT_ADMIN_PIN : "1234"),
+    lecturerName: lecturer.name || "Lecturer"
+  }
+});
+
+let currentLecturer = null;
+let data = emptyWorkspace();
+let currentReport = [];
+let activeQrSession = null;
+let sessionTimerInterval = null;
+let portalTimerInterval = null;
+
+/* =========================================
+   LECTURER REGISTRY & WORKSPACE AGGREGATION
+   ========================================= */
+
+function getLecturers() {
+  try {
+    const raw = localStorage.getItem(LECTURERS_KEY);
+    if (raw) {
+      const list = JSON.parse(raw);
+      if (Array.isArray(list) && list.length) {
+        // Ensure admin exists and upgrade legacy '1234' default admin PIN automatically
+        const adminEntry = list.find(l => isAdminUser(l));
+        if (adminEntry && adminEntry.pin === "1234" && !localStorage.getItem("classtrack_admin_pin_customized")) {
+          adminEntry.pin = DEFAULT_ADMIN_PIN;
+          localStorage.setItem(LECTURERS_KEY, JSON.stringify(list));
+        }
+        return list;
+      }
+    }
+  } catch (e) {
+    console.error("Failed reading lecturers registry:", e);
+  }
+
+  const defaultList = [
+    {
+      id: "default-admin",
+      name: "System Administrator",
+      staffId: "admin",
+      department: "Academic Administration",
+      pin: DEFAULT_ADMIN_PIN
+    }
+  ];
+
+  try {
+    const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacyRaw) {
+      const legacyParsed = JSON.parse(legacyRaw);
+      if (Array.isArray(legacyParsed.lecturers)) {
+        legacyParsed.lecturers.forEach(lec => {
+          if (!defaultList.some(d => d.staffId.toLowerCase() === lec.staffId.toLowerCase())) {
+            defaultList.push(lec);
+          }
+        });
+      }
+    }
+  } catch (_) {}
+
+  localStorage.setItem(LECTURERS_KEY, JSON.stringify(defaultList));
+  return defaultList;
+}
+
+function saveLecturers(list) {
+  localStorage.setItem(LECTURERS_KEY, JSON.stringify(list));
+}
+
+function readRawWorkspaceByStaffId(staffId) {
+  try {
+    const raw = localStorage.getItem(getWorkspaceKey(staffId));
+    if (!raw) return emptyWorkspace({ staffId });
+    const parsed = JSON.parse(raw);
+    return {
+      ...emptyWorkspace({ staffId }),
+      ...parsed,
+      teachingLogs: Array.isArray(parsed.teachingLogs) ? parsed.teachingLogs : []
+    };
+  } catch (_) {
+    return emptyWorkspace({ staffId });
+  }
+}
+
+function loadGlobalAdminView(adminUser) {
+  const lecturers = getLecturers();
+  const adminOwn = readRawWorkspaceByStaffId("admin");
+  const todayStr = today();
+
+  const combined = {
+    students: [],
+    classes: [],
+    attendance: [],
+    teachingLogs: [],
+    lecturersSummary: [],
+    settings: {
+      ...emptyWorkspace(adminUser).settings,
+      ...(adminOwn.settings || {}),
+      pin: adminUser.pin
+    }
+  };
+
+  lecturers.forEach(lec => {
+    const ws = readRawWorkspaceByStaffId(lec.staffId);
+    const lecLabel = isAdminUser(lec) ? "Admin Direct" : `${lec.name} (${lec.staffId})`;
+
+    const lecClasses = (ws.classes || []).map(c => ({
+      ...c,
+      _ownerStaffId: lec.staffId,
+      _ownerName: lecLabel,
+      displayName: isAdminUser(lec) ? c.name : `${c.name} — [${lec.name}]`
+    }));
+
+    const lecStudents = (ws.students || []).map(s => ({
+      ...s,
+      _ownerStaffId: lec.staffId,
+      _ownerName: lecLabel
+    }));
+
+    const lecAttendance = (ws.attendance || []).map(a => ({
+      ...a,
+      _ownerStaffId: lec.staffId,
+      _ownerName: lecLabel
+    }));
+
+    const lecLogs = (ws.teachingLogs || []).map(log => ({
+      ...log,
+      _ownerStaffId: lec.staffId,
+      _ownerName: lec.name,
+      _ownerStaffLabel: lecLabel
+    }));
+
+    combined.classes.push(...lecClasses);
+    combined.students.push(...lecStudents);
+    combined.attendance.push(...lecAttendance);
+    combined.teachingLogs.push(...lecLogs);
+
+    if (!isAdminUser(lec) || lecClasses.length > 0 || lecStudents.length > 0 || lecLogs.length > 0) {
+      const totalRecs = lecAttendance.length;
+      const presentRecs = lecAttendance.filter(r => r.status === "Present" || r.status === "Late").length;
+      const rate = totalRecs ? Math.round((presentRecs / totalRecs) * 100) : null;
+      const signedInToday = lecLogs.some(l => l.date === todayStr);
+
+      combined.lecturersSummary.push({
+        name: lec.name,
+        staffId: lec.staffId,
+        department: lec.department || "—",
+        isAdmin: isAdminUser(lec),
+        classCount: lecClasses.length,
+        studentCount: lecStudents.length,
+        lessonsSignedIn: lecLogs.length,
+        signedInToday,
+        attendanceRate: rate
+      });
+    }
+  });
+
+  return combined;
+}
+
+function loadWorkspace(lecturer) {
+  if (isAdminUser(lecturer)) {
+    return loadGlobalAdminView(lecturer);
+  }
+
+  const key = getWorkspaceKey(lecturer.staffId);
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        ...emptyWorkspace(lecturer),
+        ...parsed,
+        teachingLogs: Array.isArray(parsed.teachingLogs) ? parsed.teachingLogs : [],
+        settings: {
+          ...emptyWorkspace(lecturer).settings,
+          ...(parsed.settings || {})
+        }
+      };
+    }
+
+    const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacyRaw && !localStorage.getItem(`${LEGACY_STORAGE_KEY}_migrated`)) {
+      const legacyParsed = JSON.parse(legacyRaw);
+      localStorage.setItem(`${LEGACY_STORAGE_KEY}_migrated`, "true");
+      const migrated = {
+        ...emptyWorkspace(lecturer),
+        students: legacyParsed.students || [],
+        classes: legacyParsed.classes || [],
+        attendance: legacyParsed.attendance || [],
+        teachingLogs: [],
+        settings: {
+          ...emptyWorkspace(lecturer).settings,
+          ...(legacyParsed.settings || {}),
+          lecturerName: lecturer.name
+        }
+      };
+      localStorage.setItem(key, JSON.stringify(migrated));
+      return migrated;
+    }
+  } catch (error) {
+    console.error("Could not load lecturer workspace:", error);
+  }
+
+  const fresh = emptyWorkspace(lecturer);
+  localStorage.setItem(key, JSON.stringify(fresh));
+  return fresh;
+}
+
+function saveData() {
+  if (!currentLecturer) return false;
+
+  if (isAdminUser(currentLecturer)) {
+    const lecturers = getLecturers();
+    lecturers.forEach(lec => {
+      const staffId = lec.staffId;
+      const existing = readRawWorkspaceByStaffId(staffId);
+      const updated = {
+        ...existing,
+        classes: data.classes
+          .filter(c => (c._ownerStaffId || "admin").toLowerCase() === staffId.toLowerCase())
+          .map(({ _ownerStaffId, _ownerName, displayName, ...clean }) => clean),
+        students: data.students
+          .filter(s => (s._ownerStaffId || "admin").toLowerCase() === staffId.toLowerCase())
+          .map(({ _ownerStaffId, _ownerName, ...clean }) => clean),
+        attendance: data.attendance
+          .filter(a => (a._ownerStaffId || "admin").toLowerCase() === staffId.toLowerCase())
+          .map(({ _ownerStaffId, _ownerName, ...clean }) => clean),
+        teachingLogs: data.teachingLogs
+          .filter(l => (l._ownerStaffId || "admin").toLowerCase() === staffId.toLowerCase())
+          .map(({ _ownerStaffId, _ownerName, _ownerStaffLabel, ...clean }) => clean),
+        settings: isAdminUser(lec) ? data.settings : existing.settings
+      };
+      localStorage.setItem(getWorkspaceKey(staffId), JSON.stringify(updated));
+    });
+    return true;
+  }
+
+  try {
+    const key = getWorkspaceKey(currentLecturer.staffId);
+    localStorage.setItem(key, JSON.stringify(data));
+    return true;
+  } catch (error) {
+    console.error("Could not save workspace data:", error);
+    toast("Could not save data. Browser storage may be full.");
+    return false;
+  }
+}
+
+/* =========================================
+   ADMIN-ASSISTED CREDENTIAL RESET
+   ========================================= */
+
+function adminResetLecturerPin(targetStaffId) {
+  if (!isAdminUser(currentLecturer)) {
+    alert("Unauthorized: Only the System Administrator can reset lecturer credentials.");
+    return;
+  }
+  if (String(targetStaffId).toLowerCase() === "admin") {
+    alert("Use Settings & backup to change the Admin password.");
+    return;
+  }
+
+  const lecturers = getLecturers();
+  const lec = lecturers.find(l => l.staffId.toLowerCase() === String(targetStaffId).toLowerCase());
+  if (!lec) return;
+
+  const newPin = prompt(
+    `Reset Login PIN for:\n${lec.name} (Staff ID: ${lec.staffId})\n\nEnter a new temporary PIN/Password (minimum 4 characters):`,
+    "2026"
+  );
+  if (newPin === null) return;
+
+  const cleanedPin = newPin.trim();
+  if (cleanedPin.length < 4) {
+    alert("PIN must be at least 4 characters long.");
+    return;
+  }
+
+  lec.pin = cleanedPin;
+  saveLecturers(lecturers);
+
+  const ws = readRawWorkspaceByStaffId(lec.staffId);
+  ws.settings = { ...(ws.settings || {}), pin: cleanedPin };
+  localStorage.setItem(getWorkspaceKey(lec.staffId), JSON.stringify(ws));
+
+  toast(`✓ PIN reset for ${lec.name} (${lec.staffId}). Share temporary PIN: ${cleanedPin}`);
+}
+
+/* =========================================
+   LECTURER CLASS SIGN-IN (TEACHING VERIFICATION)
+   ========================================= */
+
+function recordLecturerTeachingSignIn(classId, topic = "", silent = false) {
+  const cls = data.classes.find(c => c.id === classId);
+  if (!cls) return;
+
+  if (!Array.isArray(data.teachingLogs)) data.teachingLogs = [];
+  const dateStr = today();
+  const timeStr = nowTimeFormatted();
+  const ownerId = cls._ownerStaffId || currentLecturer?.staffId || "admin";
+
+  const existingToday = data.teachingLogs.find(
+    l => l.classId === classId && l.date === dateStr
+  );
+
+  if (existingToday && silent) return;
+
+  if (existingToday) {
+    existingToday.time = timeStr;
+    if (topic) existingToday.topic = topic;
+    existingToday.timestamp = new Date().toISOString();
+  } else {
+    data.teachingLogs.push({
+      id: makeId(),
+      classId,
+      className: cls.name,
+      classCode: cls.code || "",
+      date: dateStr,
+      time: timeStr,
+      topic: topic || "Scheduled Lecture / Practical Session",
+      status: "Signed In · Teaching",
+      timestamp: new Date().toISOString(),
+      _ownerStaffId: ownerId
+    });
+  }
+
+  if (saveData() && !silent) {
+    renderClasses();
+    renderDashboard();
+    toast(`✓ Signed in to teach ${cls.name} at ${timeStr}`);
+  }
+}
+
+function promptLecturerClassSignIn(classId) {
+  const cls = data.classes.find(c => c.id === classId);
+  if (!cls) return;
+
+  const topicInput = prompt(
+    `Confirm Class Sign-In for:\n${cls.name}${cls.code ? ` (${cls.code})` : ""}\n\nEnter lesson topic or room/venue (optional):`,
+    "Lecture Session"
+  );
+  if (topicInput === null) return;
+
+  recordLecturerTeachingSignIn(classId, topicInput.trim() || "Lecture Session", false);
+}
+
+/* =========================================
+   STANDALONE MOBILE QR PORTAL + DEVICE LOCK
+   ========================================= */
+
+function lockPortalForm(formEl, message) {
+  formEl.querySelectorAll("input, button").forEach(el => {
+    el.disabled = true;
+  });
+  const fb = formEl.querySelector(".kiosk-feedback");
+  if (fb) {
+    fb.textContent = message;
+    fb.className = "kiosk-feedback err";
+  }
+}
+
+function checkUrlPortalMode() {
+  const params = new URLSearchParams(window.location.search);
+  const mode = params.get("mode");
+  if (!mode) return false;
+
+  const lecStaffId = params.get("lec") || "admin";
+  const classId = params.get("class") || "";
+  const className = params.get("cname") || "Assigned Class";
+  const expiresAt = parseInt(params.get("exp") || "0", 10);
+  const sessionDate = params.get("date") || today();
+  const sessionToken = params.get("token") || `${lecStaffId}_${classId}_${sessionDate}`;
+
+  const lecturers = getLecturers();
+  const ownerLec = lecturers.find(l => l.staffId.toLowerCase() === lecStaffId.toLowerCase()) || {
+    staffId: lecStaffId,
+    name: "Lecturer"
+  };
+  currentLecturer = ownerLec;
+  data = readRawWorkspaceByStaffId(ownerLec.staffId);
+
+  $("loginScreen").style.display = "none";
+  $("appShell").style.display = "none";
+  $("mobileStudentPortal").style.display = "grid";
+
+  if (mode === "enroll") {
+    const enrollLockKey = `classtrack_device_enrolled_${lecStaffId}_${classId}`;
+    const alreadyEnrolledAdm = localStorage.getItem(enrollLockKey);
+
+    $("portalEyebrow").textContent = `DAY 1 ONBOARDING · ${ownerLec.name.toUpperCase()}`;
+    $("portalTitle").textContent = "Class Self-Registration";
+    $("portalSubtitle").textContent = className;
+    $("portalTimerBar").style.display = "none";
+    const form = $("phoneEnrollForm");
+    form.style.display = "grid";
+
+    if (alreadyEnrolledAdm) {
+      lockPortalForm(
+        form,
+        `🔒 Device Locked: This device already registered (${alreadyEnrolledAdm}) for this unit.`
+      );
+      return true;
+    }
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (localStorage.getItem(enrollLockKey)) return;
+
+      const name = $("phoneRegName").value.trim();
+      const admission = $("phoneRegAdm").value.trim();
+      const phone = $("phoneRegPhone").value.trim();
+      const fb = $("phoneEnrollFeedback");
+
+      if (!name || !admission) return;
+
+      const exists = data.students.some(
+        s => s.classId === classId && s.admission.toLowerCase() === admission.toLowerCase()
+      );
+      if (exists) {
+        fb.textContent = "This admission number is already registered in this unit.";
+        fb.className = "kiosk-feedback err";
+        return;
+      }
+
+      data.students.push({
+        id: makeId(),
+        name,
+        admission,
+        classId,
+        phone,
+        createdDate: today()
+      });
+      localStorage.setItem(getWorkspaceKey(ownerLec.staffId), JSON.stringify(data));
+      localStorage.setItem(enrollLockKey, admission);
+
+      form.reset();
+      lockPortalForm(
+        form,
+        `✓ Registered ${name} (${admission})! Device is now locked to prevent duplicate entries.`
+      );
+      fb.className = "kiosk-feedback ok";
+    });
+    return true;
+  }
+
+  if (mode === "checkin") {
+    const checkinLockKey = `classtrack_device_checkin_${sessionToken}`;
+    const alreadyCheckedAdm = localStorage.getItem(checkinLockKey);
+
+    $("portalEyebrow").textContent = `TIMED CHECK-IN · ${ownerLec.name.toUpperCase()}`;
+    $("portalTitle").textContent = "Mark Attendance";
+    $("portalSubtitle").textContent = `${className} · ${formatDate(sessionDate)}`;
+    const form = $("phoneCheckInForm");
+    form.style.display = "grid";
+
+    if (alreadyCheckedAdm) {
+      lockPortalForm(
+        form,
+        `🔒 Device Locked: Attendance already recorded from this device (${alreadyCheckedAdm}).`
+      );
+    }
+
+    const tickPortal = () => {
+      const rem = expiresAt - Date.now();
+      if (expiresAt && rem <= 0) {
+        clearInterval(portalTimerInterval);
+        $("portalCountdown").textContent = "00:00 (EXPIRED)";
+        form.style.display = "none";
+        $("portalExpiredBox").style.display = "block";
+        return;
+      }
+      if (expiresAt) {
+        const sec = Math.ceil(rem / 1000);
+        const m = String(Math.floor(sec / 60)).padStart(2, "0");
+        const s = String(sec % 60).padStart(2, "0");
+        $("portalCountdown").textContent = `${m}:${s}`;
+      }
+    };
+
+    tickPortal();
+    portalTimerInterval = setInterval(tickPortal, 1000);
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (localStorage.getItem(checkinLockKey)) return;
+
+      const fb = $("phoneCheckFeedback");
+      if (expiresAt && Date.now() >= expiresAt) {
+        fb.textContent = "Attendance window has expired.";
+        fb.className = "kiosk-feedback err";
+        return;
+      }
+
+      const adm = $("phoneCheckAdm").value.trim();
+      if (!adm) return;
+
+      const matchedStudent = data.students.find(
+        s => s.classId === classId && s.admission.toLowerCase() === adm.toLowerCase()
+      );
+
+      if (data.students.some(s => s.classId === classId) && !matchedStudent) {
+        fb.textContent = "Admission number not enrolled in this unit.";
+        fb.className = "kiosk-feedback err";
+        return;
+      }
+
+      if (matchedStudent) {
+        const existingIdx = data.attendance.findIndex(
+          r => r.studentId === matchedStudent.id && r.classId === classId && r.date === sessionDate
+        );
+        const rec = {
+          id: existingIdx >= 0 ? data.attendance[existingIdx].id : makeId(),
+          studentId: matchedStudent.id,
+          classId,
+          date: sessionDate,
+          status: "Present",
+          remarks: "Self check-in via QR scan",
+          createdAt: new Date().toISOString()
+        };
+        if (existingIdx >= 0) data.attendance[existingIdx] = rec;
+        else data.attendance.push(rec);
+        localStorage.setItem(getWorkspaceKey(ownerLec.staffId), JSON.stringify(data));
+      }
+
+      localStorage.setItem(checkinLockKey, adm);
+
+      $("phoneCheckAdm").value = "";
+      lockPortalForm(
+        form,
+        `✓ Present confirmed for ${matchedStudent ? matchedStudent.name : adm}! Device locked for this lesson.`
+      );
+      fb.className = "kiosk-feedback ok";
+    });
+    return true;
+  }
+
+  return false;
+}
+
+/* =========================================
+   AUTHENTICATION, SIGN UP & CREDENTIAL RECOVERY
+   ========================================= */
+
+function setupAuthUIEnhancements() {
+  // Remove "(Default: 1234)" hint from login screen for security
+  const loginLabels = $("loginForm").querySelectorAll("small");
+  loginLabels.forEach(el => {
+    if (el.textContent.includes("1234")) {
+      el.textContent = "Enter your personal PIN / Password";
+    }
+  });
+
+  // Inject "Forgot Staff ID or PIN?" recovery trigger & panel on the login card
+  if (!$("forgotCredsTrigger")) {
+    const footerLink = $("showSignUpBtn")?.closest("p") || $("loginForm").lastElementChild;
+    const recoveryTrigger = document.createElement("p");
+    recoveryTrigger.id = "forgotCredsTrigger";
+    recoveryTrigger.style.cssText = "text-align:center;font-size:12px;color:#5f6f8a;margin-top:8px;";
+    recoveryTrigger.innerHTML = `Forgot Staff ID or PIN? <button type="button" id="openRecoveryBtn" style="background:none;border:none;color:#2f6fed;font-weight:600;cursor:pointer;text-decoration:underline;padding:0;">Get Assistance / Reset</button>`;
+    footerLink.parentNode.insertBefore(recoveryTrigger, footerLink.nextSibling);
+
+    const recoveryBox = document.createElement("form");
+    recoveryBox.id = "recoveryForm";
+    recoveryBox.style.cssText = "display:none;gap:10px;margin-top:10px;";
+    recoveryBox.innerHTML = `
+      <div style="background:#f3f6fc;border:1px solid #d8e2f3;border-radius:8px;padding:10px;font-size:12px;color:#293852;line-height:1.45;">
+        <strong>Lecturer Credential Assistance:</strong><br>
+        1. Contact the <strong>System Administrator</strong> to reset your PIN instantly from the Admin Dashboard, <em>or</em><br>
+        2. Verify your registered <strong>Staff ID</strong> and <strong>Full Name</strong> below to set a new PIN.
+      </div>
+      <label class="field" style="display:grid;gap:4px;font-size:12px;font-weight:600;">
+        <span>Registered Staff ID / Email</span>
+        <input id="recStaffId" required placeholder="e.g. lec123">
+      </label>
+      <label class="field" style="display:grid;gap:4px;font-size:12px;font-weight:600;">
+        <span>Registered Full Name</span>
+        <input id="recFullName" required placeholder="Exact name used at sign up">
+      </label>
+      <label class="field" style="display:grid;gap:4px;font-size:12px;font-weight:600;">
+        <span>New PIN / Password (min 4 chars)</span>
+        <input id="recNewPin" type="password" required minlength="4" placeholder="Enter new PIN">
+      </label>
+      <div id="recoveryFeedback" style="font-size:12px;min-height:16px;"></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;">Verify & Reset Lecturer PIN</button>
+      <button type="button" id="backToSignInBtn" class="btn btn-light" style="width:100%;">Back to Sign In</button>
+    `;
+    $("loginForm").parentNode.insertBefore(recoveryBox, $("loginForm").nextSibling);
+
+    $("openRecoveryBtn").addEventListener("click", () => toggleAuthMode("recovery"));
+    $("backToSignInBtn").addEventListener("click", () => toggleAuthMode("signin"));
+    recoveryBox.addEventListener("submit", handleSelfServiceRecovery);
+  }
+}
+
+function handleSelfServiceRecovery(event) {
+  event.preventDefault();
+  const staffId = $("recStaffId").value.trim().toLowerCase();
+  const fullName = $("recFullName").value.trim().toLowerCase();
+  const newPin = $("recNewPin").value.trim();
+  const fb = $("recoveryFeedback");
+
+  if (staffId === "admin") {
+    fb.style.color = "#c93b44";
+    fb.textContent = "Admin password cannot be reset here. Only the System Administrator can change it inside Settings.";
+    return;
+  }
+
+  const lecturers = getLecturers();
+  const matched = lecturers.find(
+    l => l.staffId.toLowerCase() === staffId && l.name.trim().toLowerCase() === fullName
+  );
+
+  if (!matched) {
+    fb.style.color = "#c93b44";
+    fb.textContent = "Staff ID and Full Name did not match our records. Please ask the System Administrator to reset your PIN.";
+    return;
+  }
+
+  matched.pin = newPin;
+  saveLecturers(lecturers);
+
+  const ws = readRawWorkspaceByStaffId(matched.staffId);
+  ws.settings = { ...(ws.settings || {}), pin: newPin };
+  localStorage.setItem(getWorkspaceKey(matched.staffId), JSON.stringify(ws));
+
+  $("recoveryForm").reset();
+  toggleAuthMode("signin");
+  $("loginStaffId").value = matched.staffId;
+  toast(`✓ PIN updated for ${matched.name}. Sign in with your new PIN.`);
+}
+
+function checkAuth() {
+  const activeUserRaw = sessionStorage.getItem(SESSION_AUTH_KEY);
+  if (activeUserRaw) {
+    unlockApp(JSON.parse(activeUserRaw));
+  } else {
+    $("loginScreen").style.display = "grid";
+    $("appShell").style.display = "none";
+  }
+}
+
+function toggleAuthMode(mode) {
+  $("loginError").textContent = "";
+  $("signUpError").textContent = "";
+  if ($("recoveryFeedback")) $("recoveryFeedback").textContent = "";
+
+  $("loginForm").style.display = mode === "signin" ? "grid" : "none";
+  $("signUpForm").style.display = mode === "signup" ? "grid" : "none";
+  if ($("recoveryForm")) $("recoveryForm").style.display = mode === "recovery" ? "grid" : "none";
+  if ($("forgotCredsTrigger")) $("forgotCredsTrigger").style.display = mode === "signin" ? "block" : "none";
+
+  if (mode === "signup") {
+    $("authSubtitle").textContent = "Create Private Lecturer Workspace";
+  } else if (mode === "recovery") {
+    $("authSubtitle").textContent = "Lecturer Account Recovery";
+  } else {
+    $("authSubtitle").textContent = "Lecturer & Administrator Sign In";
+  }
+}
+
+function handleSignUp(event) {
+  event.preventDefault();
+  const name = $("regName").value.trim();
+  const staffId = $("regStaffId").value.trim();
+  const department = $("regDept").value.trim();
+  const pin = $("regPin").value.trim();
+
+  if (!name || !staffId || !department || pin.length < 4) {
+    $("signUpError").textContent = "Fill all fields and use at least a 4-character PIN.";
+    return;
+  }
+
+  if (staffId.toLowerCase() === "admin") {
+    $("signUpError").textContent = "Staff ID 'admin' is reserved for the System Administrator.";
+    return;
+  }
+
+  const lecturers = getLecturers();
+  const exists = lecturers.some(
+    lec => lec.staffId.toLowerCase() === staffId.toLowerCase()
+  );
+  if (exists) {
+    $("signUpError").textContent = "That Staff ID / Email is already registered. Sign in instead.";
+    return;
+  }
+
+  const newLecturer = { id: makeId(), name, staffId, department, pin };
+  lecturers.push(newLecturer);
+  saveLecturers(lecturers);
+
+  sessionStorage.setItem(SESSION_AUTH_KEY, JSON.stringify(newLecturer));
+  $("signUpForm").reset();
+  unlockApp(newLecturer);
+  toast(`Private workspace created for ${name}!`);
+}
+
+function handleLogin(event) {
+  event.preventDefault();
+  const staffIdInput = $("loginStaffId").value.trim().toLowerCase();
+  const pin = $("loginPin").value.trim();
+
+  const lecturers = getLecturers();
+  const matched = lecturers.find(
+    lec => lec.staffId.toLowerCase() === staffIdInput && lec.pin === pin
+  );
+
+  if (!matched) {
+    $("loginError").textContent = "Invalid Staff ID or PIN. Click 'Get Assistance / Reset' below if you forgot your login details.";
+    return;
+  }
+
+  sessionStorage.setItem(SESSION_AUTH_KEY, JSON.stringify(matched));
+  $("loginError").textContent = "";
+  $("loginPin").value = "";
+  unlockApp(matched);
+  toast(isAdminUser(matched)
+    ? "Signed in as System Administrator (Global Oversight Mode)"
+    : `Welcome back, ${matched.name}`);
+}
+
+function unlockApp(user) {
+  currentLecturer = user;
+  data = loadWorkspace(user);
+
+  $("institutionName").value = data.settings.institution || "";
+  $("departmentName").value = data.settings.department || user.department || "";
+  $("settingsPin").value = user.pin || data.settings.pin || "";
+
+  $("loginScreen").style.display = "none";
+  $("appShell").style.display = "block";
+  $("lecturerBadge").textContent = isAdminUser(user)
+    ? `★ GLOBAL ADMIN (${user.staffId})`
+    : `${user.name} (${user.staffId})`;
+  $("userAvatar").textContent = isAdminUser(user) ? "★" : user.name.charAt(0).toUpperCase();
+
+  stopQrSession(true);
+  $("registerArea").innerHTML = `<div class="empty-state"><div class="empty-symbol">✓</div><h3>Ready to take attendance?</h3><p>Select a class and date above to load its register.</p></div>`;
+
+  populateClassSelects();
+  showView("dashboard");
+}
+
+function lockApp() {
+  stopQrSession(true);
+  currentLecturer = null;
+  data = emptyWorkspace();
+  sessionStorage.removeItem(SESSION_AUTH_KEY);
+  $("appShell").style.display = "none";
+  $("loginScreen").style.display = "grid";
+  toggleAuthMode("signin");
+  toast("Workspace locked.");
+}
+
+/* =========================================
+   GENERAL HELPER FUNCTIONS
+   ========================================= */
+
+function escapeHTML(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[character]);
+}
+
+function formatDate(value) {
+  if (!value) return "—";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+function getClassName(id) {
+  const cls = data.classes.find(item => item.id === id);
+  if (!cls) return "Unassigned";
+  return isAdminUser(currentLecturer) && cls.displayName ? cls.displayName : cls.name;
+}
+
+function getStudentName(id) {
+  return data.students.find(item => item.id === id)?.name || "Deleted student";
+}
+
+function getStudentAttendanceStats(studentId) {
+  const records = data.attendance.filter(r => r.studentId === studentId);
+  const total = records.length;
+  if (!total) return { total: 0, attended: 0, rate: null };
+  const attended = records.filter(r => r.status === "Present" || r.status === "Late").length;
+  const rate = Math.round((attended / total) * 100);
+  return { total, attended, rate };
+}
+
+function toast(message) {
+  const element = $("toast");
+  element.textContent = message;
+  element.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => {
+    element.classList.remove("show");
+  }, 2800);
+}
+
+/* =========================================
+   NAVIGATION
+   ========================================= */
+
+function showView(name) {
+  if (isAdminUser(currentLecturer)) {
+    data = loadGlobalAdminView(currentLecturer);
+  }
+
+  document.querySelectorAll(".view").forEach(view => {
+    view.classList.toggle("active", view.id === `view-${name}`);
+  });
+
+  document.querySelectorAll(".nav-link[data-view]").forEach(button => {
+    button.classList.toggle("active", button.dataset.view === name);
+  });
+
+  const adminMode = isAdminUser(currentLecturer);
+  const pageNames = {
+    dashboard: adminMode ? "Institutional Oversight Dashboard" : "Dashboard",
+    students: adminMode ? "All Institutional Students" : "Students",
+    classes: adminMode ? "All Lecturers' Classes & Units" : "My Classes & Units",
+    attendance: "Take attendance",
+    reports: adminMode ? "Global Attendance Reports" : "Reports",
+    settings: adminMode ? "Admin Security & Settings" : "Settings & backup"
+  };
+
+  $("pageName").textContent = pageNames[name] || name;
+  $("sidebar").classList.remove("open");
+
+  if (name === "dashboard") renderDashboard();
+  if (name === "students") renderStudents();
+  if (name === "classes") renderClasses();
+  if (name === "reports") renderReports();
+}
+
+/* =========================================
+   CLASS DROPDOWN LISTS
+   ========================================= */
+
+function populateClassSelects() {
+  const adminMode = isAdminUser(currentLecturer);
+  const options = data.classes
+    .map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(adminMode && item.displayName ? item.displayName : item.name)}</option>`)
+    .join("");
+
+  ["studentClass", "attendanceClass"].forEach(id => {
+    const element = $(id);
+    const previousValue = element.value;
+    const placeholder = id === "studentClass" ? "Select class" : "Select a class";
+    element.innerHTML = `<option value="">${placeholder}</option>${options}`;
+    if (data.classes.some(item => item.id === previousValue)) {
+      element.value = previousValue;
+    }
+  });
+
+  ["studentClassFilter", "reportClass"].forEach(id => {
+    const element = $(id);
+    const previousValue = element.value;
+    element.innerHTML = `<option value="">${adminMode ? "All classes (All lecturers)" : "All my classes"}</option>${options}`;
+    if (data.classes.some(item => item.id === previousValue)) {
+      element.value = previousValue;
+    }
+  });
+}
+
+/* =========================================
+   DASHBOARD, LECTURER TRACKING & AT-RISK ALERTS
+   ========================================= */
+
+function renderDashboard() {
+  const adminMode = isAdminUser(currentLecturer);
+  const date = today();
+  const todaysRecords = data.attendance.filter(record => record.date === date);
+
+  const counts = { Present: 0, Absent: 0, Late: 0, Excused: 0 };
+  todaysRecords.forEach(record => {
+    if (counts[record.status] !== undefined) counts[record.status]++;
+  });
+
+  const atRiskStudents = data.students
+    .map(student => ({ student, stats: getStudentAttendanceStats(student.id) }))
+    .filter(item => item.stats.total > 0 && item.stats.rate < 75)
+    .sort((a, b) => a.stats.rate - b.stats.rate);
+
+  $("statStudents").textContent = data.students.length;
+  $("statClasses").textContent = data.classes.length;
+  $("statPresent").textContent = counts.Present + counts.Late;
+  $("statAtRisk").textContent = atRiskStudents.length;
+  $("presentSub").textContent = `${counts.Present} present · ${counts.Late} late`;
+  $("dashboardDate").textContent = formatDate(date);
+
+  $("legendPresent").textContent = counts.Present;
+  $("legendAbsent").textContent = counts.Absent;
+  $("legendLate").textContent = counts.Late;
+  $("legendExcused").textContent = counts.Excused;
+
+  const total = todaysRecords.length;
+  const rate = total ? Math.round(((counts.Present + counts.Late) / total) * 100) : 0;
+  $("attendanceRate").textContent = `${rate}%`;
+
+  const denominator = total || 1;
+  const presentPercentage = (counts.Present / denominator) * 100;
+  const absentPercentage = (counts.Absent / denominator) * 100;
+  const latePercentage = (counts.Late / denominator) * 100;
+
+  $("attendanceDonut").style.background = `
+    conic-gradient(
+      #19a878 0% ${presentPercentage}%,
+      #e16a70 ${presentPercentage}% ${presentPercentage + absentPercentage}%,
+      #e5a13b ${presentPercentage + absentPercentage}% ${presentPercentage + absentPercentage + latePercentage}%,
+      #8195b8 ${presentPercentage + absentPercentage + latePercentage}% 100%
+    )
+  `;
+
+  $("dashboardEmpty").style.display = total ? "none" : "block";
+
+  $("atRiskBadge").textContent = `${atRiskStudents.length} Flagged`;
+  $("atRiskList").innerHTML = atRiskStudents.length
+    ? atRiskStudents.map(({ student, stats }) => `
+        <div class="risk-item">
+          <div>
+            <strong>${escapeHTML(student.name)}</strong>
+            <small>${escapeHTML(student.admission)} · ${escapeHTML(getClassName(student.classId))}</small>
+          </div>
+          <span class="risk-rate">${stats.rate}% (${stats.attended}/${stats.total})</span>
+        </div>
+      `).join("")
+    : `<div class="empty-inline">${adminMode
+        ? "No students across any lecturer's classes are currently below 75%."
+        : "All active students in your units meet the 75% threshold."}</div>`;
+
+  let adminTrackerPanel = $("adminLecturerTrackerPanel");
+  let adminTeachingLogPanel = $("adminTeachingLogPanel");
+
+  if (adminMode) {
+    const recentTablePanel = $("recentAttendance").closest(".panel");
+
+    if (!adminTrackerPanel) {
+      adminTrackerPanel = document.createElement("section");
+      adminTrackerPanel.id = "adminLecturerTrackerPanel";
+      adminTrackerPanel.className = "panel";
+      adminTrackerPanel.style.marginBottom = "18px";
+      recentTablePanel.parentNode.insertBefore(adminTrackerPanel, recentTablePanel);
+    }
+
+    if (!adminTeachingLogPanel) {
+      adminTeachingLogPanel = document.createElement("section");
+      adminTeachingLogPanel.id = "adminTeachingLogPanel";
+      adminTeachingLogPanel.className = "panel";
+      adminTeachingLogPanel.style.marginBottom = "18px";
+      recentTablePanel.parentNode.insertBefore(adminTeachingLogPanel, recentTablePanel);
+    }
+
+    const summaries = data.lecturersSummary || [];
+    adminTrackerPanel.style.display = "block";
+    adminTrackerPanel.innerHTML = `
+      <div class="panel-header">
+        <div>
+          <h3>Lecturer Performance, Teaching Audit & Credential Support (Admin Only)</h3>
+          <p>Verify lecturer class sign-ins, attendance rates, or reset a lecturer's forgotten PIN</p>
+        </div>
+        <span class="date-chip">${summaries.length} Lecturer${summaries.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Lecturer</th>
+              <th>Staff ID</th>
+              <th>Department</th>
+              <th>Units</th>
+              <th>Lessons Signed In</th>
+              <th>Teaching Status</th>
+              <th>Attendance</th>
+              <th>Account Assistance</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${summaries.length
+              ? summaries.map(l => {
+                  let statusPill = `<span class="rate-pill rate-neutral">No Classes Yet</span>`;
+                  if (l.signedInToday) {
+                    statusPill = `<span class="rate-pill rate-good">✓ Teaching Today</span>`;
+                  } else if (l.lessonsSignedIn > 0) {
+                    statusPill = `<span class="rate-pill rate-good">✓ Active (${l.lessonsSignedIn})</span>`;
+                  } else if (l.classCount > 0) {
+                    statusPill = `<span class="rate-pill rate-low">Pending Sign-In</span>`;
+                  }
+
+                  const assistBtn = l.isAdmin
+                    ? `<small style="color:#8c98aa;">Admin Account</small>`
+                    : `<button type="button" class="action-btn" data-reset-lec-pin="${escapeHTML(l.staffId)}">🔑 Reset PIN</button>`;
+
+                  return `
+                    <tr>
+                      <td><strong>${escapeHTML(l.name)}</strong></td>
+                      <td>${escapeHTML(l.staffId)}</td>
+                      <td>${escapeHTML(l.department)}</td>
+                      <td>${l.classCount}</td>
+                      <td><strong>${l.lessonsSignedIn}</strong></td>
+                      <td>${statusPill}</td>
+                      <td>${l.attendanceRate === null
+                        ? `<span class="rate-pill rate-neutral">No sessions</span>`
+                        : `<span class="rate-pill ${l.attendanceRate >= 75 ? "rate-good" : "rate-low"}">${l.attendanceRate}%</span>`
+                      }</td>
+                      <td>${assistBtn}</td>
+                    </tr>
+                  `;
+                }).join("")
+              : `<tr><td colspan="8" class="table-empty">No lecturers registered yet.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    adminTrackerPanel.querySelectorAll("[data-reset-lec-pin]").forEach(btn => {
+      btn.addEventListener("click", () => adminResetLecturerPin(btn.dataset.resetLecPin));
+    });
+
+    const sortedLogs = [...(data.teachingLogs || [])]
+      .sort((a, b) => (b.timestamp || b.date).localeCompare(a.timestamp || a.date))
+      .slice(0, 12);
+
+    adminTeachingLogPanel.style.display = "block";
+    adminTeachingLogPanel.innerHTML = `
+      <div class="panel-header">
+        <div>
+          <h3>Lecturer Class Sign-In Log (Live Teaching Audit)</h3>
+          <p>Chronological record of lecturers entering class and signing in to teach specific units</p>
+        </div>
+        <span class="date-chip">${(data.teachingLogs || []).length} Total Sign-Ins</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date & Time</th>
+              <th>Lecturer</th>
+              <th>Unit / Class Taught</th>
+              <th>Lesson Topic / Venue</th>
+              <th>Verification</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sortedLogs.length
+              ? sortedLogs.map(log => `
+                  <tr>
+                    <td>${formatDate(log.date)} · <strong>${escapeHTML(log.time || "")}</strong></td>
+                    <td><strong>${escapeHTML(log._ownerName || log._ownerStaffId)}</strong> <small style="color:#6c7a93">(${escapeHTML(log._ownerStaffId)})</small></td>
+                    <td>${escapeHTML(log.className)}${log.classCode ? ` (${escapeHTML(log.classCode)})` : ""}</td>
+                    <td>${escapeHTML(log.topic || "Lecture Session")}</td>
+                    <td><span class="status-pill status-Present">${escapeHTML(log.status || "Signed In · Teaching")}</span></td>
+                  </tr>
+                `).join("")
+              : `<tr><td colspan="5" class="table-empty">No lecturer class sign-ins recorded yet.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+  } else {
+    if (adminTrackerPanel) adminTrackerPanel.style.display = "none";
+    if (adminTeachingLogPanel) adminTeachingLogPanel.style.display = "none";
+  }
+
+  const recent = [...data.attendance]
+    .sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt))
+    .slice(0, 8);
+
+  $("recentAttendance").innerHTML = recent.length
+    ? recent.map(record => {
+        const student = data.students.find(item => item.id === record.studentId);
+        return `
+          <tr>
+            <td>${formatDate(record.date)}</td>
+            <td>${escapeHTML(getStudentName(record.studentId))}</td>
+            <td>${escapeHTML(student?.admission || "—")}</td>
+            <td>${escapeHTML(getClassName(record.classId))}</td>
+            <td><span class="status-pill status-${record.status}">${record.status}</span></td>
+          </tr>
+        `;
+      }).join("")
+    : `<tr><td colspan="5" class="table-empty">No attendance records yet.</td></tr>`;
+}
+
+/* =========================================
+   STUDENT MANAGEMENT
+   ========================================= */
+
+function renderStudents() {
+  populateClassSelects();
+
+  const query = $("studentSearch").value.trim().toLowerCase();
+  const classFilter = $("studentClassFilter").value;
+
+  const students = data.students
+    .filter(student => {
+      const matchesClass = !classFilter || student.classId === classFilter;
+      const matchesSearch = !query || `${student.name} ${student.admission} ${student._ownerName || ""}`.toLowerCase().includes(query);
+      return matchesClass && matchesSearch;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  $("studentCount").textContent = `${students.length} student${students.length === 1 ? "" : "s"}`;
+
+  $("studentsTable").innerHTML = students.length
+    ? students.map(student => {
+        const initials = student.name.split(/\s+/).map(p => p[0]).slice(0, 2).join("").toUpperCase();
+        const stats = getStudentAttendanceStats(student.id);
+        let rateHTML = `<span class="rate-pill rate-neutral">No sessions</span>`;
+        if (stats.total > 0) {
+          const cls = stats.rate >= 75 ? "rate-good" : "rate-low";
+          rateHTML = `<span class="rate-pill ${cls}">${stats.rate}% (${stats.attended}/${stats.total})</span>`;
+        }
+
+        return `
+          <tr>
+            <td>
+              <div class="student-name-cell">
+                <span class="mini-avatar">${escapeHTML(initials)}</span>
+                <strong>${escapeHTML(student.name)}</strong>
+              </div>
+            </td>
+            <td>${escapeHTML(student.admission)}</td>
+            <td>${escapeHTML(getClassName(student.classId))}</td>
+            <td>${escapeHTML(student.phone || "—")}</td>
+            <td>${rateHTML}</td>
+            <td>
+              <button class="action-btn" data-edit-student="${escapeHTML(student.id)}">Edit</button>
+              <button class="action-btn delete" data-delete-student="${escapeHTML(student.id)}">Delete</button>
+            </td>
+          </tr>
+        `;
+      }).join("")
+    : `<tr><td colspan="6" class="table-empty">${data.students.length ? "No students match your search." : "No students registered yet."}</td></tr>`;
+}
+
+function openStudent(id = "") {
+  if (!data.classes.length) {
+    alert("Create a class/unit first before adding students.");
+    return;
+  }
+  $("studentForm").reset();
+  $("studentId").value = id;
+  populateClassSelects();
+
+  const student = data.students.find(item => item.id === id);
+  $("studentDialogTitle").textContent = student ? "Edit student" : "Add student";
+
+  if (student) {
+    $("studentName").value = student.name;
+    $("studentAdmission").value = student.admission;
+    $("studentClass").value = student.classId;
+    $("studentPhone").value = student.phone || "";
+  }
+
+  $("studentDialog").showModal();
+}
+
+function saveStudent(event) {
+  event.preventDefault();
+  const id = $("studentId").value;
+  const name = $("studentName").value.trim();
+  const admission = $("studentAdmission").value.trim();
+  const classId = $("studentClass").value;
+  const phone = $("studentPhone").value.trim();
+
+  if (!name || !admission || !classId) {
+    toast("Please complete all required fields.");
+    return;
+  }
+
+  const duplicate = data.students.find(
+    student => student.classId === classId && student.admission.toLowerCase() === admission.toLowerCase() && student.id !== id
+  );
+  if (duplicate) {
+    alert("That admission number is already registered in this unit.");
+    return;
+  }
+
+  const targetClass = data.classes.find(c => c.id === classId);
+  const ownerStaffId = targetClass?._ownerStaffId || currentLecturer?.staffId || "admin";
+
+  if (id) {
+    const student = data.students.find(item => item.id === id);
+    Object.assign(student, { name, admission, classId, phone, _ownerStaffId: ownerStaffId });
+  } else {
+    data.students.push({
+      id: makeId(),
+      name,
+      admission,
+      classId,
+      phone,
+      createdDate: today(),
+      _ownerStaffId: ownerStaffId
+    });
+  }
+
+  if (saveData()) {
+    $("studentDialog").close();
+    renderStudents();
+    renderDashboard();
+    toast(id ? "Student updated." : "Student registered.");
+  }
+}
+
+function handleStudentActions(event) {
+  const editButton = event.target.closest("[data-edit-student]");
+  const deleteButton = event.target.closest("[data-delete-student]");
+
+  if (editButton) openStudent(editButton.dataset.editStudent);
+
+  if (deleteButton) {
+    const id = deleteButton.dataset.deleteStudent;
+    const student = data.students.find(item => item.id === id);
+    if (confirm(`Delete ${student?.name || "this student"}? Their attendance history will also be deleted.`)) {
+      data.students = data.students.filter(item => item.id !== id);
+      data.attendance = data.attendance.filter(record => record.studentId !== id);
+      saveData();
+      renderStudents();
+      renderDashboard();
+      toast("Student and related attendance records deleted.");
+    }
+  }
+}
+
+/* =========================================
+   CLASS MANAGEMENT (UNLIMITED UNITS) + SIGN IN TO TEACH + DAY 1 QR
+   ========================================= */
+
+function renderClasses() {
+  populateClassSelects();
+  const adminMode = isAdminUser(currentLecturer);
+  const todayStr = today();
+
+  $("classGrid").innerHTML = data.classes.length
+    ? data.classes
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(classItem => {
+          const count = data.students.filter(student => student.classId === classItem.id).length;
+          const classLogs = (data.teachingLogs || []).filter(l => l.classId === classItem.id);
+          const signedInToday = classLogs.some(l => l.date === todayStr);
+
+          const ownerBadge = adminMode && classItem._ownerName
+            ? `<div style="font-size:11px;color:#2f6fed;font-weight:600;margin-top:4px;">Lecturer: ${escapeHTML(classItem._ownerName)}</div>`
+            : "";
+
+          const teachingStatusBadge = signedInToday
+            ? `<div style="font-size:11px;color:#11835c;font-weight:600;margin-top:4px;">✓ Signed in to teach today (${classLogs.length} total lessons)</div>`
+            : `<div style="font-size:11px;color:#6c7a93;margin-top:4px;">Lessons taught: ${classLogs.length}</div>`;
+
+          return `
+            <article class="class-card">
+              <div class="class-card-top">
+                <span class="class-symbol">▤</span>
+                <div class="class-actions" style="flex-wrap:wrap;justify-content:flex-end;">
+                  <button class="action-btn" style="background:#e9f8f2;color:#11835c;border-color:#bfe8d8;font-weight:600;" data-teach-class="${escapeHTML(classItem.id)}">
+                    ${signedInToday ? "✓ Signed In" : "✓ Sign In to Teach"}
+                  </button>
+                  <button class="action-btn enroll" data-enroll-class="${escapeHTML(classItem.id)}">⊞ Day 1 Enroll QR</button>
+                  <button class="action-btn" data-edit-class="${escapeHTML(classItem.id)}">Edit</button>
+                  <button class="action-btn delete" data-delete-class="${escapeHTML(classItem.id)}">Delete</button>
+                </div>
+              </div>
+              <h3>${escapeHTML(classItem.name)}</h3>
+              <p>${escapeHTML(classItem.code || "No unit code")}</p>
+              ${ownerBadge}
+              ${teachingStatusBadge}
+              <div class="class-meta">
+                <span>Enrolled students</span>
+                <strong>${count}</strong>
+              </div>
+            </article>
+          `;
+        }).join("")
+    : `<div class="panel empty-state" style="grid-column:1/-1"><div class="empty-symbol">▤</div><h3>No classes created yet</h3><p>Add as many classes or units as needed, sign in when teaching, and share each unit's Day 1 Enroll QR.</p></div>`;
+}
+
+function openEnrollModal(classId) {
+  const classItem = data.classes.find(c => c.id === classId);
+  if (!classItem) return;
+
+  $("selfEnrollForm").reset();
+  $("enrollTargetClassId").value = classId;
+  $("enrollModalClassName").textContent = `${classItem.name} — Day 1 Onboarding`;
+  $("selfEnrollFeedback").textContent = "";
+  $("selfEnrollFeedback").className = "kiosk-feedback";
+
+  const baseUrl = window.location.href.split("?")[0];
+  const ownerId = classItem._ownerStaffId || currentLecturer?.staffId || "admin";
+  const enrollUrl = `${baseUrl}?mode=enroll&lec=${encodeURIComponent(ownerId)}&class=${encodeURIComponent(classId)}&cname=${encodeURIComponent(classItem.name)}`;
+  $("enrollShareLink").value = enrollUrl;
+
+  const qrBox = $("enrollQrBox");
+  qrBox.innerHTML = "";
+  if (typeof QRCode !== "undefined") {
+    new QRCode(qrBox, {
+      text: enrollUrl,
+      width: 115,
+      height: 115,
+      colorDark: "#15233d",
+      colorLight: "#ffffff"
+    });
+  }
+
+  $("enrollQrDialog").showModal();
+}
+
+function handleSelfEnrollSubmit(event) {
+  event.preventDefault();
+  const classId = $("enrollTargetClassId").value;
+  const name = $("selfRegName").value.trim();
+  const admission = $("selfRegAdm").value.trim();
+  const phone = $("selfRegPhone").value.trim();
+  const fb = $("selfEnrollFeedback");
+
+  if (!name || !admission || !classId) return;
+
+  const duplicate = data.students.find(
+    s => s.classId === classId && s.admission.toLowerCase() === admission.toLowerCase()
+  );
+  if (duplicate) {
+    fb.textContent = `Admission number ${admission} is already enrolled in this unit.`;
+    fb.className = "kiosk-feedback err";
+    return;
+  }
+
+  const targetClass = data.classes.find(c => c.id === classId);
+  data.students.push({
+    id: makeId(),
+    name,
+    admission,
+    classId,
+    phone,
+    createdDate: today(),
+    _ownerStaffId: targetClass?._ownerStaffId || currentLecturer?.staffId || "admin"
+  });
+
+  if (saveData()) {
+    renderClasses();
+    renderStudents();
+    renderDashboard();
+    fb.textContent = `✓ ${name} (${admission}) enrolled into ${getClassName(classId)}!`;
+    fb.className = "kiosk-feedback ok";
+    $("selfRegName").value = "";
+    $("selfRegAdm").value = "";
+    $("selfRegPhone").value = "";
+    toast(`${name} self-registered!`);
+  }
+}
+
+function openClass(id = "") {
+  $("classForm").reset();
+  $("classId").value = id;
+  const classItem = data.classes.find(item => item.id === id);
+  $("classDialogTitle").textContent = classItem ? "Edit class / unit" : "Add class / unit";
+
+  if (classItem) {
+    $("className").value = classItem.name;
+    $("classCode").value = classItem.code || "";
+  }
+  $("classDialog").showModal();
+}
+
+function saveClass(event) {
+  event.preventDefault();
+  const id = $("classId").value;
+  const name = $("className").value.trim();
+  const code = $("classCode").value.trim();
+  if (!name) return;
+
+  const duplicate = data.classes.find(
+    classItem => classItem.name.toLowerCase() === name.toLowerCase() && classItem.id !== id
+  );
+  if (duplicate) {
+    alert("A class with that name already exists.");
+    return;
+  }
+
+  if (id) {
+    Object.assign(data.classes.find(item => item.id === id), { name, code });
+  } else {
+    data.classes.push({
+      id: makeId(),
+      name,
+      code,
+      createdDate: today(),
+      _ownerStaffId: currentLecturer?.staffId || "admin"
+    });
+  }
+
+  if (saveData()) {
+    $("classDialog").close();
+    renderClasses();
+    renderStudents();
+    renderDashboard();
+    toast(id ? "Class updated." : "Class created.");
+  }
+}
+
+function handleClassActions(event) {
+  const teachButton = event.target.closest("[data-teach-class]");
+  const enrollButton = event.target.closest("[data-enroll-class]");
+  const editButton = event.target.closest("[data-edit-class]");
+  const deleteButton = event.target.closest("[data-delete-class]");
+
+  if (teachButton) promptLecturerClassSignIn(teachButton.dataset.teachClass);
+  if (enrollButton) openEnrollModal(enrollButton.dataset.enrollClass);
+  if (editButton) openClass(editButton.dataset.editClass);
+
+  if (deleteButton) {
+    const id = deleteButton.dataset.deleteClass;
+    if (data.students.some(student => student.classId === id)) {
+      alert("This class has students assigned to it. Reassign or delete those students before deleting the class.");
+      return;
+    }
+    if (confirm("Delete this class, its teaching logs, and its attendance records?")) {
+      data.classes = data.classes.filter(item => item.id !== id);
+      data.attendance = data.attendance.filter(record => record.classId !== id);
+      data.teachingLogs = (data.teachingLogs || []).filter(log => log.classId !== id);
+      saveData();
+      renderClasses();
+      renderDashboard();
+      toast("Class deleted.");
+    }
+  }
+}
+
+/* =========================================
+   TIMED QR CODE & LESSON STUDENT CHECK-IN
+   ========================================= */
+
+function startQrSession() {
+  const classId = $("attendanceClass").value;
+  const date = $("attendanceDate").value;
+  const minutes = parseInt($("sessionDuration").value, 10) || 5;
+
+  if (!classId || !date) {
+    toast("Please select a Class and Date below first.");
+    return;
+  }
+
+  const classStudents = data.students.filter(s => s.classId === classId);
+  if (!classStudents.length) {
+    toast("No students enrolled in this class yet. Use Day 1 Enroll QR under Classes first.");
+    return;
+  }
+
+  recordLecturerTeachingSignIn(classId, "Live QR Attendance Session", true);
+  renderRegister();
+
+  const targetClass = data.classes.find(c => c.id === classId);
+  const ownerId = targetClass?._ownerStaffId || currentLecturer?.staffId || "admin";
+  const expiresAt = Date.now() + minutes * 60 * 1000;
+  const sessionToken = Math.random().toString(36).substring(2, 8).toUpperCase();
+  const className = targetClass?.name || getClassName(classId);
+
+  activeQrSession = {
+    token: sessionToken,
+    classId,
+    className,
+    date,
+    expiresAt,
+    ownerId
+  };
+
+  const baseUrl = window.location.href.split("?")[0];
+  const shareUrl = `${baseUrl}?mode=checkin&lec=${encodeURIComponent(ownerId)}&token=${sessionToken}&class=${encodeURIComponent(classId)}&cname=${encodeURIComponent(className)}&date=${date}&exp=${expiresAt}`;
+
+  $("sessionClassLabel").textContent = `${className} (${formatDate(date)})`;
+  $("sessionShareLink").value = shareUrl;
+  $("activeSessionBox").style.display = "flex";
+  $("startQrSessionBtn").style.display = "none";
+  $("stopQrSessionBtn").style.display = "inline-flex";
+
+  const qrContainer = $("qrcodeContainer");
+  qrContainer.innerHTML = "";
+  if (typeof QRCode !== "undefined") {
+    new QRCode(qrContainer, {
+      text: shareUrl,
+      width: 120,
+      height: 120,
+      colorDark: "#15233d",
+      colorLight: "#ffffff"
+    });
+  } else {
+    qrContainer.innerHTML = `<div style="padding:20px;font-weight:700;">CODE: ${sessionToken}</div>`;
+  }
+
+  clearInterval(sessionTimerInterval);
+  updateSessionCountdown();
+  sessionTimerInterval = setInterval(updateSessionCountdown, 1000);
+  toast(`Timed check-in started (${minutes} mins) & lecturer signed in.`);
+}
+
+function updateSessionCountdown() {
+  if (!activeQrSession) return;
+  const remainingMs = activeQrSession.expiresAt - Date.now();
+  const badge = $("sessionTimerBadge");
+  const kioskTimer = $("kioskCountdown");
+
+  if (remainingMs <= 0) {
+    clearInterval(sessionTimerInterval);
+    badge.textContent = "Session Expired";
+    badge.className = "timer-pill expired";
+    if (kioskTimer) kioskTimer.textContent = "00:00 (EXPIRED)";
+    $("kioskActiveBody").style.display = "none";
+    $("kioskExpiredBody").style.display = "block";
+    activeQrSession.expired = true;
+    toast("Student self-check-in window has closed.");
+    return;
+  }
+
+  const totalSec = Math.ceil(remainingMs / 1000);
+  const mins = String(Math.floor(totalSec / 60)).padStart(2, "0");
+  const secs = String(totalSec % 60).padStart(2, "0");
+  const formatted = `${mins}:${secs}`;
+
+  badge.textContent = `Open · ${formatted} left`;
+  badge.className = "timer-pill live";
+  if (kioskTimer) kioskTimer.textContent = formatted;
+}
+
+function stopQrSession(silent = false) {
+  clearInterval(sessionTimerInterval);
+  activeQrSession = null;
+  if ($("activeSessionBox")) $("activeSessionBox").style.display = "none";
+  if ($("startQrSessionBtn")) $("startQrSessionBtn").style.display = "inline-flex";
+  if ($("stopQrSessionBtn")) $("stopQrSessionBtn").style.display = "none";
+  if ($("sessionTimerBadge")) {
+    $("sessionTimerBadge").textContent = "No active session";
+    $("sessionTimerBadge").className = "timer-pill";
+  }
+  if (!silent) toast("Check-in session ended.");
+}
+
+function openStudentKiosk() {
+  if (!activeQrSession) return;
+  $("kioskClassName").textContent = activeQrSession.className;
+  $("kioskFeedback").textContent = "";
+  $("kioskFeedback").className = "kiosk-feedback";
+  $("kioskAdmissionInput").value = "";
+
+  if (activeQrSession.expired || Date.now() >= activeQrSession.expiresAt) {
+    $("kioskActiveBody").style.display = "none";
+    $("kioskExpiredBody").style.display = "block";
+  } else {
+    $("kioskActiveBody").style.display = "block";
+    $("kioskExpiredBody").style.display = "none";
+  }
+  $("studentKioskDialog").showModal();
+}
+
+function handleStudentSelfCheckIn(event) {
+  event.preventDefault();
+  const feedback = $("kioskFeedback");
+
+  if (!activeQrSession || activeQrSession.expired || Date.now() >= activeQrSession.expiresAt) {
+    feedback.textContent = "Sorry, the attendance window has expired.";
+    feedback.className = "kiosk-feedback err";
+    return;
+  }
+
+  const admInput = $("kioskAdmissionInput").value.trim().toLowerCase();
+  const student = data.students.find(
+    s => s.classId === activeQrSession.classId && s.admission.toLowerCase() === admInput
+  );
+
+  if (!student) {
+    feedback.textContent = "Not enrolled in this unit. Complete Day 1 registration first.";
+    feedback.className = "kiosk-feedback err";
+    return;
+  }
+
+  const existingIndex = data.attendance.findIndex(
+    r => r.studentId === student.id && r.classId === activeQrSession.classId && r.date === activeQrSession.date
+  );
+
+  const record = {
+    id: existingIndex >= 0 ? data.attendance[existingIndex].id : makeId(),
+    studentId: student.id,
+    classId: activeQrSession.classId,
+    date: activeQrSession.date,
+    status: "Present",
+    remarks: "Self check-in via QR/Link",
+    createdAt: new Date().toISOString(),
+    _ownerStaffId: activeQrSession.ownerId
+  };
+
+  if (existingIndex >= 0) {
+    data.attendance[existingIndex] = record;
+  } else {
+    data.attendance.push(record);
+  }
+
+  saveData();
+  renderRegister();
+  renderDashboard();
+
+  feedback.textContent = `✓ Checked in: ${student.name} (${student.admission})`;
+  feedback.className = "kiosk-feedback ok";
+  $("kioskAdmissionInput").value = "";
+  toast(`${student.name} checked in via QR portal!`);
+}
+
+/* =========================================
+   ATTENDANCE REGISTER & BULK ACTIONS
+   ========================================= */
+
+function renderRegister() {
+  const classId = $("attendanceClass").value;
+  const date = $("attendanceDate").value;
+  const area = $("registerArea");
+
+  if (!classId || !date) {
+    area.innerHTML = `<div class="empty-state"><div class="empty-symbol">✓</div><h3>Select a class and date</h3><p>Choose both fields above, then load the register.</p></div>`;
+    return;
+  }
+
+  const students = data.students
+    .filter(student => student.classId === classId)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  if (!students.length) {
+    area.innerHTML = `<div class="empty-state"><div class="empty-symbol">♙</div><h3>No students enrolled in this unit</h3><p>Go to Classes and share the Day 1 Enroll QR code with your students first.</p></div>`;
+    return;
+  }
+
+  const existingRecords = data.attendance.filter(record => record.classId === classId && record.date === date);
+  const existingMap = new Map(existingRecords.map(record => [record.studentId, record]));
+  const statuses = ["Present", "Absent", "Late", "Excused"];
+
+  area.innerHTML = `
+    <div class="register-heading">
+      <div>
+        <h3>${escapeHTML(getClassName(classId))}</h3>
+        <p>${formatDate(date)} · ${students.length} enrolled students</p>
+      </div>
+      <div class="bulk-actions">
+        <button type="button" class="btn btn-light btn-small" id="markAllPresentBtn">✓ Mark All Present</button>
+        <button type="button" class="btn btn-light btn-small" id="markAllAbsentBtn">! Mark All Absent</button>
+        <span class="date-chip">${existingRecords.length ? "Saved register" : "Unsaved"}</span>
+      </div>
+    </div>
+
+    <div class="register-row" style="background:#fafbfd">
+      <strong style="font-size:9px;color:#8c98aa">STUDENT</strong>
+      <strong style="font-size:9px;color:#8c98aa">STATUS</strong>
+      <strong style="font-size:9px;color:#8c98aa">REMARKS (OPTIONAL)</strong>
+    </div>
+
+    ${students.map(student => {
+      const record = existingMap.get(student.id);
+      const currentStatus = record?.status || "Present";
+      const initials = student.name.split(/\s+/).map(p => p[0]).slice(0, 2).join("").toUpperCase();
+
+      return `
+        <div class="register-row" data-register-row="${escapeHTML(student.id)}">
+          <div class="register-student">
+            <span class="mini-avatar">${escapeHTML(initials)}</span>
+            <div>
+              <strong>${escapeHTML(student.name)}</strong>
+              <small>${escapeHTML(student.admission)}</small>
+            </div>
+          </div>
+
+          <div class="status-options">
+            ${statuses.map(status => `
+              <button type="button" class="status-option ${currentStatus === status ? "selected" : ""}" data-status="${status}">
+                ${status}
+              </button>
+            `).join("")}
+          </div>
+
+          <input class="remarks-input" data-remarks="${escapeHTML(student.id)}" maxlength="160" placeholder="Add a note..." value="${escapeHTML(record?.remarks || "")}">
+        </div>
+      `;
+    }).join("")}
+
+    <div class="register-footer">
+      <small id="registerProgress">${existingRecords.length} of ${students.length} records already saved</small>
+      <button class="btn btn-primary" id="saveRegisterBtn">Save attendance register</button>
+    </div>
+  `;
+
+  area.querySelectorAll(".status-option").forEach(button => {
+    button.addEventListener("click", () => {
+      const row = button.closest(".register-row");
+      row.querySelectorAll(".status-option").forEach(item => item.classList.remove("selected"));
+      button.classList.add("selected");
+    });
+  });
+
+  $("markAllPresentBtn").addEventListener("click", () => setBulkStatus("Present"));
+  $("markAllAbsentBtn").addEventListener("click", () => setBulkStatus("Absent"));
+  $("saveRegisterBtn").addEventListener("click", saveRegister);
+}
+
+function setBulkStatus(targetStatus) {
+  $("registerArea").querySelectorAll("[data-register-row]").forEach(row => {
+    row.querySelectorAll(".status-option").forEach(btn => {
+      btn.classList.toggle("selected", btn.dataset.status === targetStatus);
+    });
+  });
+  toast(`All students marked ${targetStatus}. Click Save to confirm.`);
+}
+
+function saveRegister() {
+  const classId = $("attendanceClass").value;
+  const date = $("attendanceDate").value;
+  if (!classId || !date) {
+    toast("Select a class and date first.");
+    return;
+  }
+
+  const rows = [...$("registerArea").querySelectorAll("[data-register-row]")];
+  if (!rows.length) {
+    toast("There are no students to record.");
+    return;
+  }
+
+  const targetClass = data.classes.find(c => c.id === classId);
+  const ownerStaffId = targetClass?._ownerStaffId || currentLecturer?.staffId || "admin";
+
+  recordLecturerTeachingSignIn(classId, "Class Register Recorded", true);
+
+  rows.forEach(row => {
+    const studentId = row.dataset.registerRow;
+    const status = row.querySelector(".status-option.selected")?.dataset.status || "Present";
+    const remarks = row.querySelector("[data-remarks]")?.value.trim() || "";
+
+    const existingIndex = data.attendance.findIndex(
+      record => record.studentId === studentId && record.classId === classId && record.date === date
+    );
+
+    const record = {
+      id: existingIndex >= 0 ? data.attendance[existingIndex].id : makeId(),
+      studentId,
+      classId,
+      date,
+      status,
+      remarks,
+      createdAt: new Date().toISOString(),
+      _ownerStaffId: ownerStaffId
+    };
+
+    if (existingIndex >= 0) {
+      data.attendance[existingIndex] = record;
+    } else {
+      data.attendance.push(record);
+    }
+  });
+
+  if (saveData()) {
+    toast("Attendance register saved successfully.");
+    renderRegister();
+    renderDashboard();
+  }
+}
+
+/* =========================================
+   REPORTS & OFFICIAL PRINT SHEET
+   ========================================= */
+
+function getFilteredReports() {
+  const from = $("reportFrom").value;
+  const to = $("reportTo").value;
+  const classId = $("reportClass").value;
+  const status = $("reportStatus").value;
+
+  return data.attendance
+    .filter(record => (
+      (!from || record.date >= from) &&
+      (!to || record.date <= to) &&
+      (!classId || record.classId === classId) &&
+      (!status || record.status === status)
+    ))
+    .sort((a, b) =>
+      b.date.localeCompare(a.date) ||
+      getStudentName(a.studentId).localeCompare(getStudentName(b.studentId))
+    );
+}
+
+function renderReports() {
+  populateClassSelects();
+  currentReport = getFilteredReports();
+
+  const total = currentReport.length;
+  const present = currentReport.filter(record => record.status === "Present").length;
+  const absent = currentReport.filter(record => record.status === "Absent").length;
+  const rate = total ? Math.round((present / total) * 100) : 0;
+
+  $("reportTotal").textContent = total;
+  $("reportPresent").textContent = present;
+  $("reportAbsent").textContent = absent;
+  $("reportRate").textContent = `${rate}%`;
+  $("reportDescription").textContent = `${total} matching record${total === 1 ? "" : "s"}`;
+
+  $("reportsTable").innerHTML = total
+    ? currentReport.map(record => {
+        const student = data.students.find(item => item.id === record.studentId);
+        return `
+          <tr>
+            <td>${formatDate(record.date)}</td>
+            <td>${escapeHTML(getStudentName(record.studentId))}</td>
+            <td>${escapeHTML(student?.admission || "—")}</td>
+            <td>${escapeHTML(getClassName(record.classId))}</td>
+            <td><span class="status-pill status-${record.status}">${record.status}</span></td>
+            <td>${escapeHTML(record.remarks || "—")}</td>
+          </tr>
+        `;
+      }).join("")
+    : `<tr><td colspan="6" class="table-empty">No matching attendance records.</td></tr>`;
+}
+
+function printOfficialRegister() {
+  renderReports();
+  $("printInstitutionTitle").textContent = data.settings.institution || "TVET INSTITUTION ATTENDANCE REGISTER";
+  $("printDepartmentTitle").textContent = `${data.settings.department || "Academic Department"} — Official Attendance Sheet`;
+
+  const selectedClass = $("reportClass").value ? getClassName($("reportClass").value) : "All Classes";
+  $("printFilterSummary").textContent = `Generated by: ${currentLecturer?.name || "Lecturer"} · Scope: ${selectedClass} · Records: ${currentReport.length}`;
+  $("printGeneratedDate").textContent = `Printed on: ${formatDate(today())}`;
+  $("printLecturerSign").textContent = `${currentLecturer?.name || "Lecturer"} (${currentLecturer?.staffId || ""}) · Date: ${formatDate(today())}`;
+
+  window.print();
+}
+
+/* =========================================
+   CSV EXPORT & BACKUP / RESTORE
+   ========================================= */
+
+function csvCell(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function downloadFile(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportReport() {
+  currentReport = getFilteredReports();
+  const headers = ["Date", "Student Name", "Admission Number", "Class / Lecturer", "Status", "Remarks"];
+  const rows = currentReport.map(record => {
+    const student = data.students.find(item => item.id === record.studentId);
+    return [
+      record.date,
+      getStudentName(record.studentId),
+      student?.admission || "",
+      getClassName(record.classId),
+      record.status,
+      record.remarks || ""
+    ];
+  });
+
+  const csv = [headers, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n");
+  const slug = (currentLecturer?.staffId || "lecturer").replace(/[^a-z0-9]/gi, "_");
+  downloadFile(`attendance-${slug}-${today()}.csv`, "\uFEFF" + csv, "text/csv;charset=utf-8");
+  toast("CSV report downloaded.");
+}
+
+function backupData() {
+  const backup = {
+    lecturer: currentLecturer?.staffId,
+    isGlobalAdminBackup: isAdminUser(currentLecturer),
+    ...data,
+    backupCreatedAt: new Date().toISOString()
+  };
+  const slug = (currentLecturer?.staffId || "lecturer").replace(/[^a-z0-9]/gi, "_");
+  downloadFile(`classtrack-backup-${slug}-${today()}.json`, JSON.stringify(backup, null, 2), "application/json");
+  toast("Backup downloaded.");
+}
+
+function restoreData(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const incoming = JSON.parse(reader.result);
+      if (!incoming || !Array.isArray(incoming.students) || !Array.isArray(incoming.classes) || !Array.isArray(incoming.attendance)) {
+        throw new Error("Invalid backup structure");
+      }
+      if (!confirm("Restore this backup? Current records in this view will be replaced.")) return;
+
+      data = {
+        ...emptyWorkspace(currentLecturer),
+        ...incoming,
+        teachingLogs: Array.isArray(incoming.teachingLogs) ? incoming.teachingLogs : [],
+        settings: { ...emptyWorkspace(currentLecturer).settings, ...(incoming.settings || {}) }
+      };
+
+      if (saveData()) {
+        if (isAdminUser(currentLecturer)) data = loadGlobalAdminView(currentLecturer);
+        populateClassSelects();
+        renderDashboard();
+        renderStudents();
+        renderClasses();
+        renderReports();
+        $("institutionName").value = data.settings.institution || "";
+        $("departmentName").value = data.settings.department || "";
+        $("settingsPin").value = data.settings.pin || "";
+        toast("Backup restored.");
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Could not restore backup. Please select a valid ClassTrack JSON backup.");
+    }
+    $("restoreInput").value = "";
+  };
+  reader.readAsText(file);
+}
+
+/* =========================================
+   SETTINGS (ADMIN-ONLY ADMIN PASSWORD PROTECTION)
+   ========================================= */
+
+function saveSettings() {
+  data.settings.institution = $("institutionName").value.trim();
+  data.settings.department = $("departmentName").value.trim();
+  const newPin = $("settingsPin").value.trim();
+
+  if (newPin && currentLecturer) {
+    if (newPin.length < 4) {
+      toast("PIN/Password must be at least 4 characters.");
+      return;
+    }
+
+    if (isAdminUser(currentLecturer)) {
+      if (newPin !== currentLecturer.pin) {
+        if (!confirm("Confirm changing the System Administrator password? Only you will know this new password.")) {
+          return;
+        }
+        localStorage.setItem("classtrack_admin_pin_customized", "true");
+      }
+    }
+
+    data.settings.pin = newPin;
+    currentLecturer.pin = newPin;
+    currentLecturer.department = data.settings.department;
+    sessionStorage.setItem(SESSION_AUTH_KEY, JSON.stringify(currentLecturer));
+
+    const lecturers = getLecturers();
+    const idx = lecturers.findIndex(l => l.staffId.toLowerCase() === currentLecturer.staffId.toLowerCase());
+    if (idx >= 0) {
+      lecturers[idx].pin = newPin;
+      lecturers[idx].department = data.settings.department;
+      saveLecturers(lecturers);
+    }
+  }
+
+  if (saveData()) toast(isAdminUser(currentLecturer) ? "Admin security password & settings updated." : "Settings & PIN saved.");
+}
+
+function clearAllData() {
+  const confirmed = confirm(isAdminUser(currentLecturer)
+    ? "Clear Admin's own direct records? (Other lecturers' workspaces remain intact unless cleared individually)."
+    : `Permanently delete all students, classes, teaching logs, and attendance inside ${currentLecturer?.name}'s workspace?`);
+  if (!confirmed) return;
+
+  if (isAdminUser(currentLecturer)) {
+    localStorage.setItem(getWorkspaceKey("admin"), JSON.stringify(emptyWorkspace(currentLecturer)));
+    data = loadGlobalAdminView(currentLecturer);
+  } else {
+    data = emptyWorkspace(currentLecturer);
+    saveData();
+  }
+
+  populateClassSelects();
+  renderDashboard();
+  renderStudents();
+  renderClasses();
+  renderReports();
+  $("registerArea").innerHTML = `<div class="empty-state"><div class="empty-symbol">✓</div><h3>Ready to take attendance?</h3><p>Select a class and date above to load its student register.</p></div>`;
+  toast("Workspace cleared.");
+}
+
+/* =========================================
+   EVENT LISTENERS & INIT
+   ========================================= */
+
+function bindEvents() {
+  $("loginForm").addEventListener("submit", handleLogin);
+  $("signUpForm").addEventListener("submit", handleSignUp);
+  $("showSignUpBtn").addEventListener("click", () => toggleAuthMode("signup"));
+  $("showSignInBtn").addEventListener("click", () => toggleAuthMode("signin"));
+  $("logoutBtn").addEventListener("click", lockApp);
+
+  document.querySelectorAll("[data-view]").forEach(btn => {
+    btn.addEventListener("click", () => showView(btn.dataset.view));
+  });
+  document.querySelectorAll("[data-go]").forEach(btn => {
+    btn.addEventListener("click", () => showView(btn.dataset.go));
+  });
+  $("mobileMenu").addEventListener("click", () => $("sidebar").classList.toggle("open"));
+
+  $("addStudentBtn").addEventListener("click", () => openStudent());
+  $("studentForm").addEventListener("submit", saveStudent);
+  $("studentsTable").addEventListener("click", handleStudentActions);
+  $("studentSearch").addEventListener("input", renderStudents);
+  $("studentClassFilter").addEventListener("change", renderStudents);
+
+  $("addClassBtn").addEventListener("click", () => openClass());
+  $("classForm").addEventListener("submit", saveClass);
+  $("classGrid").addEventListener("click", handleClassActions);
+  $("selfEnrollForm").addEventListener("submit", handleSelfEnrollSubmit);
+  $("copyEnrollLinkBtn").addEventListener("click", () => {
+    navigator.clipboard?.writeText($("enrollShareLink").value);
+    toast("Day 1 enrollment link copied.");
+  });
+
+  document.querySelectorAll("[data-close]").forEach(btn => {
+    btn.addEventListener("click", () => $(btn.dataset.close).close());
+  });
+
+  $("startQrSessionBtn").addEventListener("click", startQrSession);
+  $("stopQrSessionBtn").addEventListener("click", () => stopQrSession(false));
+  $("openStudentKioskBtn").addEventListener("click", openStudentKiosk);
+  $("studentCheckInForm").addEventListener("submit", handleStudentSelfCheckIn);
+  $("copySessionLinkBtn").addEventListener("click", () => {
+    navigator.clipboard?.writeText($("sessionShareLink").value);
+    toast("Check-in link copied to clipboard.");
+  });
+
+  $("loadRegisterBtn").addEventListener("click", renderRegister);
+  $("attendanceClass").addEventListener("change", renderRegister);
+  $("attendanceDate").addEventListener("change", renderRegister);
+
+  $("filterReportsBtn").addEventListener("click", renderReports);
+  $("exportReportBtn").addEventListener("click", exportReport);
+  $("printReportBtn").addEventListener("click", printOfficialRegister);
+
+  $("backupBtn").addEventListener("click", backupData);
+  $("restoreInput").addEventListener("change", e => {
+    if (e.target.files[0]) restoreData(e.target.files[0]);
+  });
+  $("saveSettingsBtn").addEventListener("click", saveSettings);
+  $("clearDataBtn").addEventListener("click", clearAllData);
+}
+
+function init() {
+  const now = new Date();
+  $("todayLabel").textContent = now.toLocaleDateString(undefined, {
+    weekday: "short", day: "numeric", month: "short", year: "numeric"
+  });
+  $("attendanceDate").value = today();
+
+  if (checkUrlPortalMode()) return;
+
+  setupAuthUIEnhancements();
+  bindEvents();
+  checkAuth();
+}
+
+init();
