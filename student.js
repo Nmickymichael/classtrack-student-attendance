@@ -82,7 +82,7 @@ async function submitStudentCheckin(event) {
     return;
   }
   const button = byId("studentCheckinButton");
-  const admissionNumber = byId("studentCheckinAdmission").value.trim();
+  const admissionNumber = byId("studentCheckinAdmission").value.trim().toLowerCase();
   if (!admissionNumber) {
     studentMessage("Enter your admission number to continue.", true);
     return;
@@ -100,7 +100,17 @@ async function submitStudentCheckin(event) {
     byId("studentCheckinAdmission").disabled = true;
   } catch (error) {
     console.error("Student check-in error:", error);
-    studentMessage(error.message || "Could not record attendance.", true);
+    const rawMessage = String(error.message || "");
+    const normalizedError = rawMessage.toLowerCase();
+    let friendlyMessage = rawMessage || "Could not record attendance.";
+    if (normalizedError.includes("already linked") || normalizedError.includes("different student account")) {
+      friendlyMessage = "This admission number is already linked to another student account.";
+    } else if (normalizedError.includes("not enrolled") || normalizedError.includes("not registered for this class")) {
+      friendlyMessage = "You are not enrolled in this class.";
+    } else if (normalizedError.includes("admission number") && (normalizedError.includes("does not match") || normalizedError.includes("mismatch"))) {
+      friendlyMessage = "The admission number entered does not match your student account.";
+    }
+    studentMessage(friendlyMessage, true);
     button.disabled = false;
     button.textContent = "✓ Verify and check in";
   }
