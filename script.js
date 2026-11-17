@@ -14,7 +14,19 @@ const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_olGFCvyGzVdY0FSggCpoeA_UpmoTagj
 // Initialize Supabase client
 const supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
-  SUPABASE_PUBLISHABLE_KEY
+  SUPABASE_PUBLISHABLE_KEY,
+  {
+    auth: {
+      // Keep lecturer authentication scoped to this browser tab.
+      // A new tab starts at the login screen, while a page refresh in
+      // the same tab can safely restore the current lecturer session.
+      storage: window.sessionStorage,
+      storageKey: "classtrack-lecturer-auth",
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
+  }
 );
 
 console.log("ClassTrack: Supabase client initialized successfully.");
