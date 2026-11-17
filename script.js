@@ -5,7 +5,19 @@
    Admin Default PIN: 'admin@2026' (Admin-only change)
    Lecturer Recovery: Admin 'Reset PIN' Action + Self-Service Name/Staff ID Verification
    ========================================= */
+/* =========================================
+   CLASSTRACK SUPABASE CONNECTION
+   ========================================= */
+const SUPABASE_URL = "https://njvtyrhwjcfnmeicsfwr.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_olGFCvyGzVdY0FSggCpoeA_UpmoTagj";
 
+// Initialize Supabase client
+const supabaseClient = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_PUBLISHABLE_KEY
+);
+
+console.log("ClassTrack: Supabase client initialized successfully.");
 const LECTURERS_KEY = "classtrack_lecturers_registry";
 const LEGACY_STORAGE_KEY = "classtrack_attendance_v1";
 const SESSION_AUTH_KEY = "classtrack_auth_session";
