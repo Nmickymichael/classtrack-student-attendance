@@ -1368,7 +1368,7 @@ function renderClasses() {
                     ${signedInToday ? "✓ Signed In" : "✓ Sign In to Teach"}
                   </button>
                   ${signedInToday ? `<button class="action-btn delete" data-end-teach-class="${escapeHTML(classItem.id)}">End Lecture / Sign Out</button>` : ""}
-                  <button class="action-btn enroll" data-enroll-class="${escapeHTML(classItem.id)}">⊞ Day 1 Enroll QR</button>
+                  <button class="action-btn enroll" data-enroll-class="${escapeHTML(classItem.id)}">⊞ Student Registration QR</button>
                   <button class="action-btn" data-edit-class="${escapeHTML(classItem.id)}">Edit</button>
                   <button class="action-btn delete" data-delete-class="${escapeHTML(classItem.id)}">Delete</button>
                 </div>
