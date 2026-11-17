@@ -827,12 +827,11 @@ function unlockApp(user) {
 // Sign out of Supabase.
 async function lockApp() {
   try {
-    const { error } = await supabaseClient.auth.signOut();
-
-    if (error) throw error;
-
-    stopQrSession(true);
+    await stopQrSession(true);
     clearInterval(cloudRefreshInterval);
+
+    const { error } = await supabaseClient.auth.signOut();
+    if (error) throw error;
 
     currentLecturer = null;
     data = emptyWorkspace();
@@ -1532,8 +1531,13 @@ async function refreshCloudClassData(showErrors = false) {
     data.attendance = data.attendance.filter(record =>
       !classSet.has(record.classId) || (!record._cloudRecord && !remoteAttendanceIds.has(record.id))
     ).concat(remoteAttendance);
-    renderStudents(); renderClasses(); renderDashboard();
-    if ($("attendanceClass").value) renderRegister();
+    if ($("view-students").classList.contains("active") &&
+        document.activeElement !== $("studentSearch")) renderStudents();
+    if ($("view-classes").classList.contains("active")) renderClasses();
+    if ($("view-dashboard").classList.contains("active")) renderDashboard();
+    if ($("view-attendance").classList.contains("active") &&
+        !$("registerArea").contains(document.activeElement) &&
+        $("attendanceClass").value) renderRegister();
   } catch (error) {
     console.error("ClassTrack cloud refresh failed:", error);
     if (showErrors) toast("Cloud refresh failed: " + (error.message || "Check Supabase setup."));
