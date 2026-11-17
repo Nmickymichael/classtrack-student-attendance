@@ -25,16 +25,24 @@
 
       <!-- PHONE ENROLLMENT FORM -->
       <form id="phoneEnrollForm" style="display:none;">
-        <label>Full Name<input type="text" id="phoneRegName" placeholder="e.g. Jane Wanjiku" required></label>
-        <label>Admission Number<input type="text" id="phoneRegAdm" placeholder="e.g. T1211/551766/2023" required></label>
-        <label>Phone Number <span class="optional">(optional)</span><input type="text" id="phoneRegPhone" placeholder="e.g. 07XX XXX XXX"></label>
+        <label>Full Name
+          <input type="text" id="phoneRegName" placeholder="e.g. Jane Wanjiku" required>
+        </label>
+        <label>Admission Number
+          <input type="text" id="phoneRegAdm" placeholder="e.g. T1211/551766/2023" required>
+        </label>
+        <label>Phone Number <span class="optional">(optional)</span>
+          <input type="text" id="phoneRegPhone" placeholder="e.g. 07XX XXX XXX">
+        </label>
         <p class="kiosk-feedback" id="phoneEnrollFeedback"></p>
         <button type="submit" class="btn btn-primary btn-full">Complete Day 1 Registration</button>
       </form>
 
       <!-- PHONE CHECK-IN FORM -->
       <form id="phoneCheckInForm" style="display:none;">
-        <label>Admission Number<input type="text" id="phoneCheckAdm" placeholder="Enter your Admission No." required></label>
+        <label>Admission Number
+          <input type="text" id="phoneCheckAdm" placeholder="Enter your Admission No." required>
+        </label>
         <p class="kiosk-feedback" id="phoneCheckFeedback"></p>
         <button type="submit" class="btn btn-primary btn-full">✓ Mark Me Present</button>
       </form>
@@ -56,44 +64,34 @@
 
       <!-- SIGN IN FORM -->
       <form id="loginForm">
-        <label>
-          Staff ID / Email
+        <label>Staff ID / Email
           <input type="text" id="loginStaffId" placeholder="e.g. LEC/001 or default: admin" required>
         </label>
-        <label>
-          Access PIN / Password
+        <label>Access PIN / Password
           <input type="password" id="loginPin" placeholder="Enter your PIN / Password" maxlength="20" required>
         </label>
         <p class="login-error" id="loginError"></p>
         <button type="submit" class="btn btn-primary btn-full">Unlock Workspace</button>
-        <p class="auth-switch">
-          New lecturer? <button type="button" class="link-btn" id="showSignUpBtn">Create an account</button>
-        </p>
+        <p class="auth-switch">New lecturer? <button type="button" class="link-btn" id="showSignUpBtn">Create an account</button></p>
       </form>
 
       <!-- SIGN UP FORM -->
       <form id="signUpForm" style="display:none;">
-        <label>
-          Full Name
+        <label>Full Name
           <input type="text" id="regName" placeholder="e.g. Dr. Sarah Mwangi" required>
         </label>
-        <label>
-          Staff ID or Email
+        <label>Staff ID or Email
           <input type="text" id="regStaffId" placeholder="e.g. LEC/2026/04" required>
         </label>
-        <label>
-          Department
+        <label>Department
           <input type="text" id="regDept" placeholder="e.g. Computing & Informatics" required>
         </label>
-        <label>
-          Create Access PIN / Password
+        <label>Create Access PIN / Password
           <input type="password" id="regPin" placeholder="Choose a PIN (min 4 chars)" minlength="4" maxlength="20" required>
         </label>
         <p class="login-error" id="signUpError"></p>
         <button type="submit" class="btn btn-primary btn-full">Register &amp; Enter Workspace</button>
-        <p class="auth-switch">
-          Already registered? <button type="button" class="link-btn" id="showSignInBtn">Sign in here</button>
-        </p>
+        <p class="auth-switch">Already registered? <button type="button" class="link-btn" id="showSignInBtn">Sign in here</button></p>
       </form>
     </div>
   </div>
@@ -135,7 +133,9 @@
       <header class="topbar">
         <button class="mobile-menu" id="mobileMenu">☰</button>
         <div class="breadcrumb">
-          <span>Workspace</span><b>/</b><strong id="pageName">Dashboard</strong>
+          <span>Workspace</span>
+          <b>/</b>
+          <strong id="pageName">Dashboard</strong>
         </div>
         <div class="topbar-right">
           <span id="todayLabel"></span>
@@ -145,6 +145,7 @@
       </header>
 
       <div class="content">
+
         <!-- DASHBOARD -->
         <section class="view active" id="view-dashboard">
           <div class="page-heading">
@@ -158,22 +159,37 @@
 
           <div class="stats-grid">
             <article class="stat-card">
-              <div class="stat-top"><span>Total students</span><span class="stat-icon blue">♙</span></div>
+              <div class="stat-top">
+                <span>Total students</span>
+                <span class="stat-icon blue">♙</span>
+              </div>
               <strong id="statStudents">0</strong>
               <small>Registered in the system</small>
             </article>
+
             <article class="stat-card">
-              <div class="stat-top"><span>Classes / groups</span><span class="stat-icon violet">▤</span></div>
+              <div class="stat-top">
+                <span>Classes / groups</span>
+                <span class="stat-icon violet">▤</span>
+              </div>
               <strong id="statClasses">0</strong>
               <small>Registered class groups</small>
             </article>
+
             <article class="stat-card">
-              <div class="stat-top"><span>Present today</span><span class="stat-icon green">✓</span></div>
+              <div class="stat-top">
+                <span>Present today</span>
+                <span class="stat-icon green">✓</span>
+              </div>
               <strong id="statPresent">0</strong>
               <small id="presentSub">Today's attendance</small>
             </article>
+
             <article class="stat-card">
-              <div class="stat-top"><span>At-risk (&lt;75%)</span><span class="stat-icon orange">!</span></div>
+              <div class="stat-top">
+                <span>At-risk (&lt;75%)</span>
+                <span class="stat-icon orange">!</span>
+              </div>
               <strong id="statAtRisk">0</strong>
               <small>Below minimum threshold</small>
             </article>
@@ -191,7 +207,10 @@
 
               <div class="attendance-summary">
                 <div class="donut" id="attendanceDonut">
-                  <div><strong id="attendanceRate">0%</strong><small>Present</small></div>
+                  <div>
+                    <strong id="attendanceRate">0%</strong>
+                    <small>Present</small>
+                  </div>
                 </div>
                 <div class="legend">
                   <div><i class="legend-dot present-dot"></i><span>Present</span><strong id="legendPresent">0</strong></div>
@@ -220,12 +239,23 @@
 
           <article class="panel recent-panel">
             <div class="panel-heading">
-              <div><h2>Recent attendance activity</h2><p class="muted">Latest saved records</p></div>
+              <div>
+                <h2>Recent attendance activity</h2>
+                <p class="muted">Latest saved records</p>
+              </div>
               <button class="btn btn-light btn-small" data-go="reports">View reports</button>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>DATE</th><th>STUDENT</th><th>ADMISSION NO.</th><th>CLASS</th><th>STATUS</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>DATE</th>
+                    <th>STUDENT</th>
+                    <th>ADMISSION NO.</th>
+                    <th>CLASS</th>
+                    <th>STATUS</th>
+                  </tr>
+                </thead>
                 <tbody id="recentAttendance"></tbody>
               </table>
             </div>
@@ -235,18 +265,38 @@
         <!-- STUDENTS -->
         <section class="view" id="view-students">
           <div class="page-heading">
-            <div><p class="eyebrow">RECORDS</p><h1>Students</h1><p class="muted">View self-enrolled students or manually add records.</p></div>
+            <div>
+              <p class="eyebrow">RECORDS</p>
+              <h1>Students</h1>
+              <p class="muted">View self-enrolled students or manually add records.</p>
+            </div>
             <button class="btn btn-primary" id="addStudentBtn">＋ Add student</button>
           </div>
+
           <div class="toolbar">
-            <div class="search-wrap"><span>⌕</span><input id="studentSearch" type="search" placeholder="Search name or admission number..."></div>
-            <select id="studentClassFilter"><option value="">All classes</option></select>
+            <div class="search-wrap">
+              <span>⌕</span>
+              <input id="studentSearch" type="search" placeholder="Search name or admission number...">
+            </div>
+            <select id="studentClassFilter">
+              <option value="">All classes</option>
+            </select>
             <span class="result-count" id="studentCount">0 students</span>
           </div>
+
           <article class="panel table-panel">
             <div class="table-wrap">
               <table>
-                <thead><tr><th>STUDENT</th><th>ADMISSION NO.</th><th>CLASS</th><th>PHONE</th><th>ATTENDANCE %</th><th>ACTIONS</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>STUDENT</th>
+                    <th>ADMISSION NO.</th>
+                    <th>CLASS</th>
+                    <th>PHONE</th>
+                    <th>ATTENDANCE %</th>
+                    <th>ACTIONS</th>
+                  </tr>
+                </thead>
                 <tbody id="studentsTable"></tbody>
               </table>
             </div>
@@ -256,7 +306,11 @@
         <!-- CLASSES (WITH DAY 1 SELF-ENROLLMENT QR) -->
         <section class="view" id="view-classes">
           <div class="page-heading">
-            <div><p class="eyebrow">ORGANISATION &amp; DAY 1 ONBOARDING</p><h1>Classes</h1><p class="muted">Create classes and share Day 1 Student Self-Registration QR codes.</p></div>
+            <div>
+              <p class="eyebrow">ORGANISATION &amp; DAY 1 ONBOARDING</p>
+              <h1>Classes</h1>
+              <p class="muted">Create classes and share Day 1 Student Self-Registration QR codes.</p>
+            </div>
             <button class="btn btn-primary" id="addClassBtn">＋ Add class</button>
           </div>
           <div class="class-grid" id="classGrid"></div>
@@ -265,8 +319,15 @@
         <!-- ATTENDANCE -->
         <section class="view" id="view-attendance">
           <div class="page-heading">
-            <div><p class="eyebrow">DAILY REGISTER</p><h1>Take attendance</h1><p class="muted">Launch a timed QR/link check-in for enrolled students or mark manually.</p></div>
-            <div class="save-indicator"><span class="status-dot"></span>Saved in this browser</div>
+            <div>
+              <p class="eyebrow">DAILY REGISTER</p>
+              <h1>Take attendance</h1>
+              <p class="muted">Launch a timed QR/link check-in for enrolled students or mark manually.</p>
+            </div>
+            <div class="save-indicator">
+              <span class="status-dot"></span>
+              Saved in this browser
+            </div>
           </div>
 
           <!-- TIMED STUDENT CHECK-IN SESSION PANEL -->
@@ -311,13 +372,16 @@
           <article class="panel attendance-panel">
             <div class="attendance-controls">
               <label>Class / group
-                <select id="attendanceClass"><option value="">Select a class</option></select>
+                <select id="attendanceClass">
+                  <option value="">Select a class</option>
+                </select>
               </label>
               <label>Attendance date
                 <input type="date" id="attendanceDate">
               </label>
               <button class="btn btn-light" id="loadRegisterBtn">Load register</button>
             </div>
+
             <div id="registerArea">
               <div class="empty-state">
                 <div class="empty-symbol">✓</div>
@@ -331,7 +395,11 @@
         <!-- REPORTS -->
         <section class="view" id="view-reports">
           <div class="page-heading no-print">
-            <div><p class="eyebrow">ANALYTICS</p><h1>Attendance reports</h1><p class="muted">Review attendance records, print official sheets, or export CSV.</p></div>
+            <div>
+              <p class="eyebrow">ANALYTICS</p>
+              <h1>Attendance reports</h1>
+              <p class="muted">Review attendance records, print official sheets, or export CSV.</p>
+            </div>
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
               <button class="btn btn-light" id="printReportBtn">🖨 Print Register</button>
               <button class="btn btn-primary" id="exportReportBtn">↓ Export CSV</button>
@@ -348,32 +416,67 @@
           </div>
 
           <div class="toolbar report-toolbar no-print">
-            <label>From<input type="date" id="reportFrom"></label>
-            <label>To<input type="date" id="reportTo"></label>
-            <label>Class<select id="reportClass"><option value="">All classes</option></select></label>
+            <label>From <input type="date" id="reportFrom"></label>
+            <label>To <input type="date" id="reportTo"></label>
+            <label>Class
+              <select id="reportClass">
+                <option value="">All classes</option>
+              </select>
+            </label>
             <label>Status
               <select id="reportStatus">
                 <option value="">All statuses</option>
-                <option>Present</option><option>Absent</option><option>Late</option><option>Excused</option>
+                <option>Present</option>
+                <option>Absent</option>
+                <option>Late</option>
+                <option>Excused</option>
               </select>
             </label>
             <button class="btn btn-light" id="filterReportsBtn">Apply filters</button>
           </div>
 
           <div class="stats-grid report-stats">
-            <article class="stat-card"><div class="stat-top"><span>Records shown</span><span class="stat-icon blue">▤</span></div><strong id="reportTotal">0</strong><small>Matching records</small></article>
-            <article class="stat-card"><div class="stat-top"><span>Present</span><span class="stat-icon green">✓</span></div><strong id="reportPresent">0</strong><small>Present records</small></article>
-            <article class="stat-card"><div class="stat-top"><span>Absent</span><span class="stat-icon orange">!</span></div><strong id="reportAbsent">0</strong><small>Absent records</small></article>
-            <article class="stat-card"><div class="stat-top"><span>Attendance rate</span><span class="stat-icon violet">％</span></div><strong id="reportRate">0%</strong><small>Present out of all records</small></article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Records shown</span><span class="stat-icon blue">▤</span></div>
+              <strong id="reportTotal">0</strong>
+              <small>Matching records</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Present</span><span class="stat-icon green">✓</span></div>
+              <strong id="reportPresent">0</strong>
+              <small>Present records</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Absent</span><span class="stat-icon orange">!</span></div>
+              <strong id="reportAbsent">0</strong>
+              <small>Absent records</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Attendance rate</span><span class="stat-icon violet">％</span></div>
+              <strong id="reportRate">0%</strong>
+              <small>Present out of all records</small>
+            </article>
           </div>
 
           <article class="panel table-panel">
             <div class="panel-heading no-print">
-              <div><h2>Attendance records</h2><p class="muted" id="reportDescription">All saved attendance records</p></div>
+              <div>
+                <h2>Attendance records</h2>
+                <p class="muted" id="reportDescription">All saved attendance records</p>
+              </div>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>DATE</th><th>STUDENT</th><th>ADMISSION NO.</th><th>CLASS</th><th>STATUS</th><th>REMARKS</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>DATE</th>
+                    <th>STUDENT</th>
+                    <th>ADMISSION NO.</th>
+                    <th>CLASS</th>
+                    <th>STATUS</th>
+                    <th>REMARKS</th>
+                  </tr>
+                </thead>
                 <tbody id="reportsTable"></tbody>
               </table>
             </div>
@@ -396,16 +499,26 @@
         <!-- SETTINGS -->
         <section class="view" id="view-settings">
           <div class="page-heading">
-            <div><p class="eyebrow">SYSTEM PREFERENCES</p><h1>Settings &amp; backup</h1><p class="muted">Configure institution headers, security PIN, and data backups.</p></div>
+            <div>
+              <p class="eyebrow">SYSTEM PREFERENCES</p>
+              <h1>Settings &amp; backup</h1>
+              <p class="muted">Configure institution headers, security PIN, and data backups.</p>
+            </div>
           </div>
 
           <div class="settings-grid">
             <article class="panel settings-card">
               <h2>Institution &amp; Security details</h2>
               <p class="muted">Appears on printed registers and secures your workspace login.</p>
-              <label>Institution / college name<input id="institutionName" placeholder="e.g. University of Embu TVET Institute"></label>
-              <label>Department / section<input id="departmentName" placeholder="e.g. Computing & Informatics Department"></label>
-              <label>Admin Security Password / PIN<input id="settingsPin" type="password" maxlength="20" placeholder="Enter secure password"></label>
+              <label>Institution / college name
+                <input id="institutionName" placeholder="e.g. University of Embu TVET Institute">
+              </label>
+              <label>Department / section
+                <input id="departmentName" placeholder="e.g. Computing & Informatics Department">
+              </label>
+              <label>Admin Security Password / PIN
+                <input id="settingsPin" type="password" maxlength="20" placeholder="Enter secure password">
+              </label>
               <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
             </article>
 
@@ -429,9 +542,12 @@
           </div>
           <p class="version-note">ClassTrack v3.4 · HTML, CSS and JavaScript</p>
         </section>
+
       </div>
 
-      <footer class="footer no-print">ClassTrack <span>•</span> Student Class Attendance Management System</footer>
+      <footer class="footer no-print">
+        ClassTrack <span>•</span> Student Class Attendance Management System
+      </footer>
     </main>
   </div>
 
@@ -439,16 +555,29 @@
   <dialog id="studentDialog" class="modal">
     <form id="studentForm">
       <div class="modal-heading">
-        <div><p class="eyebrow">STUDENT RECORD</p><h2 id="studentDialogTitle">Add student</h2></div>
+        <div>
+          <p class="eyebrow">STUDENT RECORD</p>
+          <h2 id="studentDialogTitle">Add student</h2>
+        </div>
         <button type="button" class="icon-button" data-close="studentDialog">×</button>
       </div>
       <input type="hidden" id="studentId">
-      <label>Full name<input id="studentName" required maxlength="100" placeholder="e.g. Jane Wanjiku"></label>
+      <label>Full name
+        <input id="studentName" required maxlength="100" placeholder="e.g. Jane Wanjiku">
+      </label>
       <div class="form-row">
-        <label>Admission number<input id="studentAdmission" required maxlength="40" placeholder="e.g. TVET/ICT/001"></label>
-        <label>Class / group<select id="studentClass" required><option value="">Select class</option></select></label>
+        <label>Admission number
+          <input id="studentAdmission" required maxlength="40" placeholder="e.g. TVET/ICT/001">
+        </label>
+        <label>Class / group
+          <select id="studentClass" required>
+            <option value="">Select class</option>
+          </select>
+        </label>
       </div>
-      <label>Phone number <span class="optional">(optional)</span><input id="studentPhone" maxlength="25" placeholder="e.g. 07XX XXX XXX"></label>
+      <label>Phone number <span class="optional">(optional)</span>
+        <input id="studentPhone" maxlength="25" placeholder="e.g. 07XX XXX XXX">
+      </label>
       <div class="modal-actions">
         <button type="button" class="btn btn-light" data-close="studentDialog">Cancel</button>
         <button type="submit" class="btn btn-primary">Save student</button>
@@ -460,12 +589,19 @@
   <dialog id="classDialog" class="modal">
     <form id="classForm">
       <div class="modal-heading">
-        <div><p class="eyebrow">CLASS SETUP</p><h2 id="classDialogTitle">Add class</h2></div>
+        <div>
+          <p class="eyebrow">CLASS SETUP</p>
+          <h2 id="classDialogTitle">Add class</h2>
+        </div>
         <button type="button" class="icon-button" data-close="classDialog">×</button>
       </div>
       <input type="hidden" id="classId">
-      <label>Class / course name<input id="className" required maxlength="100" placeholder="e.g. Diploma in ICT - Year 1"></label>
-      <label>Class code <span class="optional">(optional)</span><input id="classCode" maxlength="30" placeholder="e.g. DICT-Y1"></label>
+      <label>Class / course name
+        <input id="className" required maxlength="100" placeholder="e.g. Diploma in ICT - Year 1">
+      </label>
+      <label>Class code <span class="optional">(optional)</span>
+        <input id="classCode" maxlength="30" placeholder="e.g. DICT-Y1">
+      </label>
       <div class="modal-actions">
         <button type="button" class="btn btn-light" data-close="classDialog">Cancel</button>
         <button type="submit" class="btn btn-primary">Save class</button>
@@ -499,10 +635,16 @@
       <hr style="border:0; border-top:1px solid #eef1f5; margin:2px 0;">
       <p class="muted"><strong>Live Student Onboarding Form (Test or Kiosk Mode):</strong></p>
       <input type="hidden" id="enrollTargetClassId">
-      <label>Full Name<input type="text" id="selfRegName" placeholder="e.g. Brian Omondi" required></label>
+      <label>Full Name
+        <input type="text" id="selfRegName" placeholder="e.g. Brian Omondi" required>
+      </label>
       <div class="form-row">
-        <label>Admission Number<input type="text" id="selfRegAdm" placeholder="e.g. T1211/551800/2023" required></label>
-        <label>Phone Number <span class="optional">(optional)</span><input type="text" id="selfRegPhone" placeholder="e.g. 0712 345 678"></label>
+        <label>Admission Number
+          <input type="text" id="selfRegAdm" placeholder="e.g. T1211/551800/2023" required>
+        </label>
+        <label>Phone Number <span class="optional">(optional)</span>
+          <input type="text" id="selfRegPhone" placeholder="e.g. 0712 345 678">
+        </label>
       </div>
       <div id="selfEnrollFeedback" class="kiosk-feedback"></div>
       <div class="modal-actions">
@@ -530,8 +672,7 @@
 
       <div id="kioskActiveBody">
         <p class="muted" style="margin-bottom:14px;">Already enrolled on Day 1? Enter your Admission Number below to mark yourself <strong>Present</strong>.</p>
-        <label>
-          Admission Number
+        <label>Admission Number
           <input type="text" id="kioskAdmissionInput" placeholder="e.g. T1211/551766/2023" required autocomplete="off">
         </label>
         <div id="kioskFeedback" class="kiosk-feedback"></div>
@@ -550,6 +691,11 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <!-- SUPABASE JAVASCRIPT CLIENT -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- CLASSTRACK APPLICATION -->
   <script src="script.js"></script>
 </body>
 </html>
