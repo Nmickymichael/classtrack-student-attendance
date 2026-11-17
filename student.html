@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClassTrack | Student Portal</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body.student-page{min-height:100vh;background:#f4f7fb;display:grid;place-items:center;padding:24px}
+    .student-card{width:min(100%,460px);background:#fff;border:1px solid #e6ebf2;border-radius:18px;padding:30px;box-shadow:0 18px 50px rgba(21,35,61,.09)}
+    .student-card form{display:grid;gap:14px}
+    .student-card .muted{line-height:1.55}
+    .student-message{font-size:13px;line-height:1.5;margin:12px 0;color:#176c51;min-height:18px}
+    .student-message.error{color:#c43e49}
+    .student-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+    .student-actions button{background:none;border:0;color:#2863c8;text-decoration:underline;cursor:pointer;font:inherit}
+    .student-hidden{display:none!important}
+  </style>
+</head>
+<body class="student-page">
+  <main class="student-card">
+    <div class="brand-mark login-logo">CT</div>
+    <p class="eyebrow" style="color:#15966b;margin-top:18px">STUDENT PORTAL</p>
+    <h1 id="studentTitle">Welcome to ClassTrack</h1>
+    <p class="muted" id="studentSubtitle">Register once, then sign in whenever you attend class.</p>
+
+    <form id="studentLoginForm">
+      <label>Email address
+        <input id="studentLoginEmail" type="email" autocomplete="email" required placeholder="Your student email">
+      </label>
+      <label>Password
+        <input id="studentLoginPassword" type="password" autocomplete="current-password" required placeholder="Your password">
+      </label>
+      <button class="btn btn-primary btn-full" type="submit">Sign in</button>
+    </form>
+
+    <form id="studentSignupForm" class="student-hidden">
+      <label>Full name
+        <input id="studentSignupName" type="text" autocomplete="name" required placeholder="Your full name">
+      </label>
+      <label>Email address
+        <input id="studentSignupEmail" type="email" autocomplete="email" required placeholder="Your email address">
+      </label>
+      <label>Create password
+        <input id="studentSignupPassword" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters">
+      </label>
+      <button class="btn btn-primary btn-full" type="submit">Create student account</button>
+    </form>
+
+    <form id="studentRegistrationForm" class="student-hidden">
+      <label>Full name
+        <input id="studentFullName" type="text" required placeholder="Your full name">
+      </label>
+      <label>Admission number
+        <input id="studentAdmission" type="text" required placeholder="e.g. T1211/551766/2023">
+      </label>
+      <label>Phone number <span class="optional">(optional)</span>
+        <input id="studentPhone" type="tel" placeholder="07XX XXX XXX">
+      </label>
+      <button class="btn btn-primary btn-full" type="submit">Complete class registration</button>
+    </form>
+
+    <section id="studentCheckinPanel" class="student-hidden">
+      <p class="muted">You are signed in. Tap below to record your attendance for this lecture.</p>
+      <button id="studentCheckinButton" class="btn btn-primary btn-full" type="button">✓ Check in as present</button>
+    </section>
+
+    <p id="studentMessage" class="student-message" role="status" aria-live="polite"></p>
+    <div class="student-actions">
+      <button id="studentModeToggle" type="button">New student? Create an account</button>
+      <button id="studentSignOut" class="student-hidden" type="button">Sign out</button>
+      <a href="./" style="color:#2863c8">Lecturer portal</a>
+    </div>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="student.js"></script>
+</body>
+</html>
