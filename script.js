@@ -756,6 +756,47 @@ async function handleLogin(event) {
   }
 }
 
+
+// Send a Supabase password-reset email to the entered lecturer email address.
+async function handleForgotPassword() {
+  const emailInput = $("loginStaffId");
+  const email = emailInput.value.trim().toLowerCase();
+  const messageBox = $("loginError");
+  const forgotButton = $("forgotPasswordBtn");
+
+  messageBox.textContent = "";
+
+  if (!email || !emailInput.checkValidity()) {
+    messageBox.textContent = "Please enter a valid email address first.";
+    emailInput.focus();
+    return;
+  }
+
+  forgotButton.disabled = true;
+  forgotButton.textContent = "Sending reset email...";
+
+  try {
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname
+    });
+
+    if (error) throw error;
+
+    messageBox.textContent =
+      "If an account exists for this email, a password reset link has been sent. Please check your inbox and spam folder.";
+    toast("Password reset instructions requested.");
+
+  } catch (error) {
+    console.error("Password reset request error:", error);
+    messageBox.textContent =
+      error.message || "Could not request a password reset. Please try again.";
+
+  } finally {
+    forgotButton.disabled = false;
+    forgotButton.textContent = "Forgot password?";
+  }
+}
+
 function unlockApp(user) {
   currentLecturer = user;
   data = loadWorkspace(user);
@@ -2051,6 +2092,7 @@ function clearAllData() {
 
 function bindEvents() {
   $("loginForm").addEventListener("submit", handleLogin);
+  $("forgotPasswordBtn").addEventListener("click", handleForgotPassword);
   $("signUpForm").addEventListener("submit", handleSignUp);
   $("showSignUpBtn").addEventListener("click", () => toggleAuthMode("signup"));
   $("showSignInBtn").addEventListener("click", () => toggleAuthMode("signin"));
