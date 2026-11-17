@@ -5,9 +5,19 @@ alter table public.students
   add column if not exists user_id uuid references auth.users(id) on delete set null,
   add column if not exists email text;
 
-create unique index if not exists students_user_id_unique
+create index if not exists students_user_id_idx
   on public.students(user_id)
   where user_id is not null;
+
+create unique index if not exists classes_enrollment_token_unique
+  on public.classes(enrollment_token);
+
+-- A student may attend multiple classes on the same date.
+alter table public.attendance
+  drop constraint if exists attendance_student_id_attendance_date_key;
+alter table public.attendance
+  add constraint attendance_student_class_date_key
+  unique (student_id, class_id, attendance_date);
 
 create table if not exists public.attendance_sessions (
   id uuid primary key default gen_random_uuid(),
@@ -183,7 +193,7 @@ begin
     (class_id, student_id, attendance_date, status, notes)
   values
     (v_session.class_id, v_student.id, v_session.attendance_date, 'Present', 'Student QR self check-in')
-  on conflict (student_id, attendance_date)
+  on conflict (student_id, class_id, attendance_date)
   do update set
     status = 'Present',
     notes = 'Student QR self check-in';
