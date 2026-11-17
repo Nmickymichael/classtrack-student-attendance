@@ -1498,10 +1498,28 @@ async function refreshCloudClassData(showErrors = false) {
       createdDate: student.created_at ? student.created_at.slice(0, 10) : today(), _cloudRecord: true
     }));
     const classSet = new Set(classIds);
-    const remoteStudentIds = new Set(remoteStudents.map(student => student.id));
-    data.students = data.students.filter(student =>
-      !classSet.has(student.classId) || (!student._cloudRecord && !remoteStudentIds.has(student.id))
-    ).concat(remoteStudents);
+    const cloudByAdmission = new Map(remoteStudents.map(student =>
+      [student.classId + "|" + student.admission.toLowerCase(), student]
+    ));
+    const replacedStudentIds = new Map();
+    const retainedStudents = data.students.filter(student => {
+      if (!classSet.has(student.classId)) return true;
+      if (student._cloudRecord) return false;
+      const match = cloudByAdmission.get(student.classId + "|" + String(student.admission || "").toLowerCase());
+      if (match) {
+        replacedStudentIds.set(student.id, match.id);
+        return false;
+      }
+      return true;
+    });
+    data.students = retainedStudents.concat(remoteStudents);
+    if (replacedStudentIds.size) {
+      data.attendance.forEach(record => {
+        if (replacedStudentIds.has(record.studentId)) {
+          record.studentId = replacedStudentIds.get(record.studentId);
+        }
+      });
+    }
     const { data: cloudAttendance, error: attendanceError } = await supabaseClient.from("attendance")
       .select("id, class_id, student_id, attendance_date, status, notes, created_at").in("class_id", classIds);
     if (attendanceError) throw attendanceError;
