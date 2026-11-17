@@ -361,7 +361,7 @@
             <div class="panel-heading" style="margin-bottom:12px;">
               <div>
                 <h2>Lesson Attendance QR &amp; Link (Enrolled Students Only)</h2>
-                <p class="muted">Students who enrolled on Day 1 scan this code and enter their Admission Number.</p>
+                <p class="muted">Students scan this code, sign in to their student account, and check in for this lecture.</p>
               </div>
               <span class="timer-pill" id="sessionTimerBadge">No active session</span>
             </div>
@@ -376,7 +376,7 @@
                 </select>
               </label>
               <button class="btn btn-primary" id="startQrSessionBtn">Launch Timed Check-In</button>
-              <button class="btn btn-danger" id="stopQrSessionBtn" style="display:none;">End Window Now</button>
+              <button class="btn btn-danger" id="stopQrSessionBtn" style="display:none;">End Check-In Window</button>
             </div>
 
             <div class="active-session-box" id="activeSessionBox" style="display:none;">
@@ -384,7 +384,7 @@
               <div class="session-details">
                 <span class="eyebrow" style="color:#15966b;">LIVE CHECK-IN WINDOW OPEN</span>
                 <h3 id="sessionClassLabel">Class Name</h3>
-                <p class="muted">Students scan this QR code or open the check-in kiosk below before the timer expires.</p>
+                <p class="muted">Students scan this code to open the separate Student Portal. Attendance is saved to your lecturer register automatically.</p>
                 <div class="session-link-row">
                   <input type="text" id="sessionShareLink" readonly>
                   <button type="button" class="btn btn-light btn-small" id="copySessionLinkBtn">Copy Link</button>
