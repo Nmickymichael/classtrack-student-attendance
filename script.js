@@ -1209,7 +1209,7 @@ function renderDashboard() {
         <div><span class="live-dot"></span><strong>${activeTeachingLogs.length}</strong><small>Teaching now</small></div>
         <div><strong>${completedTeachingLogs.length}</strong><small>Sessions completed today</small></div>
         <div><strong>${todayLogs.length}</strong><small>Sign-ins today</small></div>
-      </div>`
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
