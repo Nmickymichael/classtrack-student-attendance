@@ -628,7 +628,10 @@ async function authUserToLecturer(user) {
     throw new Error("Your account has no ClassTrack role. Contact the System Administrator.");
   }
   if (roleRecord.account_status !== "active") {
-    throw new Error("Your ClassTrack account is suspended. Contact the System Administrator.");
+    const message = roleRecord.account_status === "pending"
+      ? "Your lecturer account is awaiting administrator approval."
+      : "Your ClassTrack account is suspended. Contact the System Administrator.";
+    throw new Error(message);
   }
   if (roleRecord.role === "student") {
     throw new Error("This is a student account. Please use the Student Portal.");
@@ -1867,6 +1870,7 @@ async function saveClass(event) {
       savedClass = inserted;
     }
 
+    const priorClass = data.classes.find(item => item.id === savedClass.id);
     const mappedClass = {
       id: savedClass.id,
       name: savedClass.name,
@@ -1876,7 +1880,10 @@ async function saveClass(event) {
       enrollmentToken: savedClass.enrollment_token || "",
       createdDate: savedClass.created_at ? savedClass.created_at.slice(0, 10) : today(),
       _cloudRecord: true,
-      _ownerStaffId: currentLecturer.staffId
+      _ownerId: savedClass.owner_id,
+      _ownerStaffId: isAdminUser(currentLecturer) ? savedClass.owner_id : currentLecturer.staffId,
+      _ownerName: priorClass?._ownerName || "",
+      displayName: isAdminUser(currentLecturer) ? `${savedClass.name} — [${priorClass?._ownerName || "Lecturer"}]` : savedClass.name
     };
     const existingIndex = data.classes.findIndex(item => item.id === mappedClass.id);
     if (existingIndex >= 0) data.classes[existingIndex] = mappedClass;
@@ -2658,13 +2665,16 @@ async function loadAdminSecurityPanel() {
     if (accountsBody) {
       const lecturers = accountList.filter(account => account.role === "lecturer");
       accountsBody.innerHTML = lecturers.length ? lecturers.map(account => {
-        const suspended = account.account_status === "suspended";
+        const status = account.account_status;
+        const statusLabel = status === "pending" ? "Pending approval" : status === "suspended" ? "Suspended" : "Active";
+        const nextStatus = status === "active" ? "suspended" : "active";
+        const actionLabel = status === "pending" ? "Approve" : status === "suspended" ? "Reactivate" : "Suspend";
         return `<tr>
           <td>${escapeHTML(account.full_name || "Lecturer")}</td>
           <td>${escapeHTML(account.email || "—")}</td>
           <td>${escapeHTML(account.department || "—")}</td>
-          <td><span class="status-pill status-${suspended ? "Absent" : "Present"}">${suspended ? "Suspended" : "Active"}</span></td>
-          <td><button class="action-btn ${suspended ? "" : "delete"}" data-admin-account-status="${escapeHTML(account.user_id)}" data-next-status="${suspended ? "active" : "suspended"}">${suspended ? "Reactivate" : "Suspend"}</button></td>
+          <td><span class="status-pill status-${status === "active" ? "Present" : "Absent"}">${statusLabel}</span></td>
+          <td><button class="action-btn ${status === "active" ? "delete" : ""}" data-admin-account-status="${escapeHTML(account.user_id)}" data-next-status="${nextStatus}">${actionLabel}</button></td>
         </tr>`;
       }).join("") : '<tr><td colspan="5" class="table-empty">No lecturer accounts found.</td></tr>';
     }
