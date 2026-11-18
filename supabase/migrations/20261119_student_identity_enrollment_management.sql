@@ -23,8 +23,18 @@ begin
   if v_duplicates is not null then
     raise exception 'Student identity migration paused: duplicate admission numbers exist within a class: %. Resolve duplicates without deleting attendance history, then rerun this migration.', v_duplicates;
   end if;
+
+  if exists (
+    select 1
+    from public.students
+    where user_id is not null
+    group by user_id, class_id
+    having count(*) > 1
+  ) then
+    raise exception 'Student identity migration paused: one Supabase account is attached to multiple student rows in the same class. Review those records before rerunning.';
+  end if;
 end;
-$$;
+$;
 
 -- One normalized admission number per class, regardless of capitalization or spaces.
 create unique index if not exists students_class_normalized_admission_uidx
@@ -226,6 +236,66 @@ $$;
 
 revoke all on function public.student_check_in(uuid, text) from public, anon;
 grant execute on function public.student_check_in(uuid, text) to authenticated;
+
+
+-- Only the verified account-linking RPC may assign a student user_id.
+-- Linked email changes are synchronized from Supabase Auth after the new
+-- Auth email has been confirmed; lecturers cannot silently redirect an account.
+create or replace function public.classtrack_guard_student_identity_link()
+returns trigger
+language plpgsql
+set search_path = ''
+as $
+begin
+  if tg_op = 'INSERT' then
+    if new.user_id is not null and current_user not in ('postgres', 'supabase_admin') then
+      raise exception 'Student accounts can only be linked through the verified enrollment process.';
+    end if;
+    return new;
+  end if;
+
+  if new.user_id is distinct from old.user_id
+     and current_user not in ('postgres', 'supabase_admin') then
+    raise exception 'Student account links can only be changed through the verified enrollment process.';
+  end if;
+
+  if old.user_id is not null
+     and lower(trim(coalesce(new.email, ''))) <> lower(trim(coalesce(old.email, '')))
+     and current_user not in ('postgres', 'supabase_admin') then
+    raise exception 'This student account is already linked. Change the email in Supabase Auth and confirm it; ClassTrack will synchronize the verified email.';
+  end if;
+
+  return new;
+end;
+$;
+
+drop trigger if exists classtrack_guard_student_identity_link on public.students;
+create trigger classtrack_guard_student_identity_link
+before insert or update of user_id, email on public.students
+for each row execute function public.classtrack_guard_student_identity_link();
+
+create or replace function public.classtrack_sync_student_auth_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $
+begin
+  if new.email is distinct from old.email then
+    update public.students
+    set email = lower(trim(new.email))
+    where user_id = new.id;
+  end if;
+  return new;
+end;
+$;
+
+drop trigger if exists classtrack_sync_student_auth_email on auth.users;
+create trigger classtrack_sync_student_auth_email
+after update of email on auth.users
+for each row
+when (new.email is distinct from old.email)
+execute function public.classtrack_sync_student_auth_email();
 
 -- Admin-only overview of account-linking readiness and records needing attention.
 create or replace function public.admin_student_enrollment_report()
