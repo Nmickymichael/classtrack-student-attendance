@@ -2842,24 +2842,27 @@ async function loadAdminSecurityPanel() {
     ]);
     if (accountError) throw accountError;
     if (auditError) throw auditError;
-    if (enrollmentError) throw enrollmentError;
 
-    const report = enrollmentReport || {};
-    $("enrollmentTotal").textContent = Number(report.total || 0).toLocaleString();
-    $("enrollmentLinked").textContent = Number(report.linked || 0).toLocaleString();
-    $("enrollmentUnlinked").textContent = Number(report.unlinked || 0).toLocaleString();
-    $("enrollmentMissingEmail").textContent = Number(report.missing_email || 0).toLocaleString();
-    const attentionBody = $("adminEnrollmentAttentionTable");
-    const attentionRows = Array.isArray(report.attention) ? report.attention : [];
-    if (attentionBody) {
-      attentionBody.innerHTML = attentionRows.length ? attentionRows.map(item => `<tr>
-        <td>${escapeHTML(item.full_name || "Student")}</td>
-        <td>${escapeHTML(item.admission_number || "—")}</td>
-        <td>${escapeHTML(item.class_name || "—")}</td>
-        <td>${escapeHTML(item.email || "Missing")}</td>
-        <td><span class="enrollment-pill pending">${escapeHTML(item.issue || "Needs review")}</span></td>
-        <td><button class="action-btn" data-edit-student="${escapeHTML(item.student_id)}">Open record</button></td>
-      </tr>`).join("") : '<tr><td colspan="6" class="table-empty">All student records have an email and linked account.</td></tr>';
+    const report = enrollmentError ? null : (enrollmentReport || {});
+    if (report) {
+      $("enrollmentTotal").textContent = Number(report.total || 0).toLocaleString();
+      $("enrollmentLinked").textContent = Number(report.linked || 0).toLocaleString();
+      $("enrollmentUnlinked").textContent = Number(report.unlinked || 0).toLocaleString();
+      $("enrollmentMissingEmail").textContent = Number(report.missing_email || 0).toLocaleString();
+      const attentionBody = $("adminEnrollmentAttentionTable");
+      const attentionRows = Array.isArray(report.attention) ? report.attention : [];
+      if (attentionBody) {
+        attentionBody.innerHTML = attentionRows.length ? attentionRows.map(item => `<tr>
+          <td>${escapeHTML(item.full_name || "Student")}</td>
+          <td>${escapeHTML(item.admission_number || "—")}</td>
+          <td>${escapeHTML(item.class_name || "—")}</td>
+          <td>${escapeHTML(item.email || "Missing")}</td>
+          <td><span class="enrollment-pill pending">${escapeHTML(item.issue || "Needs review")}</span></td>
+          <td><button class="action-btn" data-edit-student="${escapeHTML(item.student_id)}">Open record</button></td>
+        </tr>`).join("") : '<tr><td colspan="6" class="table-empty">All student records have an email and linked account.</td></tr>';
+      }
+    } else {
+      $("adminEnrollmentAttentionTable").innerHTML = '<tr><td colspan="6" class="table-empty">Apply the Student Identity &amp; Enrollment migration to activate this report.</td></tr>';
     }
 
     const accountList = accounts || [];
