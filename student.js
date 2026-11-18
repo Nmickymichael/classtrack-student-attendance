@@ -63,7 +63,7 @@ async function submitStudentRegistration(event) {
       p_phone: byId("studentPhone").value.trim()
     });
     if (error) throw error;
-    studentMessage(data?.message || "Registration saved. You can now use your student account for future check-ins.");
+    studentMessage(data?.message || "Your verified account is now linked to your class record.");
     registrationForm.reset();
     byId("studentTitle").textContent = "Registration complete!";
     byId("studentSubtitle").textContent = "Your details are saved. Use your email and password for future lectures.";
@@ -104,12 +104,18 @@ async function submitStudentCheckin(event) {
     const rawMessage = String(error.message || "");
     const normalizedError = rawMessage.toLowerCase();
     let friendlyMessage = rawMessage || "Could not record attendance.";
-    if (normalizedError.includes("already linked") || normalizedError.includes("different student account")) {
-      friendlyMessage = "This admission number is already linked to another student account.";
-    } else if (normalizedError.includes("not enrolled") || normalizedError.includes("not registered for this class")) {
-      friendlyMessage = "This admission number is not enrolled in the class attached to this QR session. Ask the lecturer to verify the class roster.";
+    if (normalizedError.includes("already linked") || normalizedError.includes("another account")) {
+      friendlyMessage = "This student record is already linked to another account. Contact the lecturer or administrator.";
+    } else if (normalizedError.includes("verify your student email")) {
+      friendlyMessage = "Please verify your email address using the confirmation link sent by Supabase before checking in.";
+    } else if (normalizedError.includes("missing a student login email")) {
+      friendlyMessage = "Your student record is missing a login email. Ask your lecturer to add the email you use for ClassTrack.";
+    } else if (normalizedError.includes("does not match the email")) {
+      friendlyMessage = "Your signed-in email differs from the email on the class register. Ask your lecturer to correct your student record.";
+    } else if (normalizedError.includes("not on the register") || normalizedError.includes("not enrolled") || normalizedError.includes("not registered for this class")) {
+      friendlyMessage = "Your admission number is not on this class register. Ask your lecturer to add your student record first.";
     } else if (normalizedError.includes("no matching student record") || normalizedError.includes("no roster record")) {
-      friendlyMessage = "No roster entry matched this admission number in the class attached to this QR session. Ask the lecturer to verify the student's class assignment and registered email.";
+      friendlyMessage = "No roster entry matched this admission number in this class. Ask your lecturer to verify your class and admission number.";
     } else if (normalizedError.includes("admission number") && (normalizedError.includes("does not match") || normalizedError.includes("mismatch"))) {
       friendlyMessage = "The admission number entered does not match your student account.";
     }
@@ -154,7 +160,7 @@ signupForm.addEventListener("submit", async event => {
     });
     if (error) throw error;
     if (data.session && data.user) {
-      studentMessage("Student account created. Complete your class registration below.");
+      studentMessage("Student account created. Continue after your email is verified and your lecturer has added your roster record.");
       setSignedInUI(data.user);
     } else {
       studentMessage("Account created. Check your email to confirm it, then sign in here to finish registration.");
