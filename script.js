@@ -1022,6 +1022,7 @@ function exportAdminAtRiskStudents() {
 function printAdminMonthlyReport() {
   if (!isAdminUser(currentLecturer)) return;
   $("reportPeriod").value = "month";
+  $("reportMonth").value = today().slice(0, 7);
   $("reportClass").value = "";
   renderReports();
   printOfficialRegister();
@@ -1103,6 +1104,8 @@ function renderDashboard() {
     : `<div class="empty-inline">${adminMode
         ? "No students across any lecturer's classes are currently below 75%."
         : "All active students in your units meet the 75% threshold."}</div>`;
+
+  renderAdminReportingHub();
 
   let adminTrackerPanel = $("adminLecturerTrackerPanel");
   let adminTeachingLogPanel = $("adminTeachingLogPanel");
