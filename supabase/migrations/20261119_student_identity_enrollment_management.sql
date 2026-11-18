@@ -36,6 +36,17 @@ begin
 end;
 $;
 
+alter table public.students
+  add column if not exists email_verified_at timestamptz;
+
+-- Backfill verification timestamps for already-linked accounts.
+update public.students s
+set email_verified_at = u.email_confirmed_at
+from auth.users u
+where u.id = s.user_id
+  and u.email_confirmed_at is not null
+  and s.email_verified_at is null;
+
 -- One normalized admission number per class, regardless of capitalization or spaces.
 create unique index if not exists students_class_normalized_admission_uidx
   on public.students (class_id, public.classtrack_normalize_admission(admission_number))
@@ -121,6 +132,7 @@ begin
   update public.students
   set user_id = v_user_id,
       email = v_auth_email,
+      email_verified_at = v_email_confirmed_at,
       phone = coalesce(nullif(trim(coalesce(p_phone, '')), ''), phone)
   where id = v_student.id;
 
@@ -210,7 +222,8 @@ begin
 
   if v_student.user_id is null then
     update public.students
-    set user_id = v_user_id
+    set user_id = v_user_id,
+        email_verified_at = v_email_confirmed_at
     where id = v_student.id
     returning * into v_student;
   end if;
@@ -248,15 +261,17 @@ set search_path = ''
 as $
 begin
   if tg_op = 'INSERT' then
-    if new.user_id is not null and current_user not in ('postgres', 'supabase_admin', 'service_role') then
+    if (new.user_id is not null or new.email_verified_at is not null)
+       and current_user not in ('postgres', 'supabase_admin', 'service_role') then
       raise exception 'Student accounts can only be linked through the verified enrollment process.';
     end if;
     return new;
   end if;
 
-  if new.user_id is distinct from old.user_id
+  if (new.user_id is distinct from old.user_id
+      or new.email_verified_at is distinct from old.email_verified_at)
      and current_user not in ('postgres', 'supabase_admin', 'service_role') then
-    raise exception 'Student account links can only be changed through the verified enrollment process.';
+    raise exception 'Student account links and verification status can only be changed through the verified enrollment process.';
   end if;
 
   if old.user_id is not null
@@ -271,7 +286,7 @@ $;
 
 drop trigger if exists classtrack_guard_student_identity_link on public.students;
 create trigger classtrack_guard_student_identity_link
-before insert or update of user_id, email on public.students
+before insert or update of user_id, email, email_verified_at on public.students
 for each row execute function public.classtrack_guard_student_identity_link();
 
 create or replace function public.classtrack_sync_student_auth_email()
@@ -281,9 +296,11 @@ security definer
 set search_path = ''
 as $
 begin
-  if new.email is distinct from old.email then
+  if new.email is distinct from old.email
+     or new.email_confirmed_at is distinct from old.email_confirmed_at then
     update public.students
-    set email = lower(trim(new.email))
+    set email = lower(trim(new.email)),
+        email_verified_at = new.email_confirmed_at
     where user_id = new.id;
   end if;
   return new;
@@ -292,7 +309,7 @@ $;
 
 drop trigger if exists classtrack_sync_student_auth_email on auth.users;
 create trigger classtrack_sync_student_auth_email
-after update of email on auth.users
+after update of email, email_confirmed_at on auth.users
 for each row
 when (new.email is distinct from old.email)
 execute function public.classtrack_sync_student_auth_email();
