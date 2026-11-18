@@ -287,6 +287,15 @@ begin
   if not found then
     raise exception 'Lecturer account not found.';
   end if;
+  insert into public.audit_logs(actor_id, action, table_name, record_id, old_data, new_data)
+  values (
+    auth.uid(),
+    'ACCOUNT_STATUS',
+    'user_roles',
+    p_user_id::text,
+    jsonb_build_object('account_status', case when p_status = 'suspended' then 'active' else 'suspended' end),
+    jsonb_build_object('account_status', p_status)
+  );
 end;
 $$;
 
