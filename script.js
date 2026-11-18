@@ -892,6 +892,10 @@ async function lockApp() {
   try {
     await stopQrSession(true);
     clearInterval(cloudRefreshInterval);
+    if (teachingSignInChannel) {
+      await supabaseClient.removeChannel(teachingSignInChannel);
+      teachingSignInChannel = null;
+    }
 
     const { error } = await supabaseClient.auth.signOut();
     if (error) throw error;
