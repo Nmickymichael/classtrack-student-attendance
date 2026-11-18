@@ -1756,6 +1756,21 @@ async function endTeachingClass(classId) {
   toast("Lecture ended at " + log.signOutTime + ". You have signed out of " + cls.name + ".");
 }
 
+function openClass(id = "") {
+  $("classForm").reset();
+  $("classId").value = id;
+
+  const classItem = data.classes.find(item => item.id === id);
+  $("classDialogTitle").textContent = classItem ? "Edit class" : "Add class";
+
+  if (classItem) {
+    $("className").value = classItem.name || "";
+    $("classCode").value = classItem.code || "";
+  }
+
+  $("classDialog").showModal();
+}
+
 async function saveClass(event) {
   event.preventDefault();
   const id = $("classId").value;
