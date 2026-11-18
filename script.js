@@ -793,6 +793,8 @@ function unlockApp(user) {
   if (attendanceNav) attendanceNav.hidden = adminMode;
   const attendanceView = $("view-attendance");
   if (attendanceView) attendanceView.hidden = adminMode;
+  const reportingHub = $("adminReportingHub");
+  if (reportingHub) reportingHub.hidden = !adminMode;
 
   $("loginScreen").style.display = "none";
   $("appShell").style.display = "block";
@@ -824,6 +826,12 @@ async function lockApp() {
 
     currentLecturer = null;
     data = emptyWorkspace();
+    const attendanceNav = document.querySelector('.nav-link[data-view="attendance"]');
+    if (attendanceNav) attendanceNav.hidden = false;
+    const attendanceView = $("view-attendance");
+    if (attendanceView) attendanceView.hidden = false;
+    const reportingHub = $("adminReportingHub");
+    if (reportingHub) reportingHub.hidden = true;
 
     sessionStorage.removeItem(SESSION_AUTH_KEY);
 
@@ -925,7 +933,7 @@ function showView(name) {
   $("pageName").textContent = pageNames[name] || name;
   $("sidebar").classList.remove("open");
 
-  if (name === "dashboard") renderDashboard();
+  if (name === "dashboard") { renderDashboard(); renderAdminReportingHub(); }
   if (name === "students") renderStudents();
   if (name === "classes") renderClasses();
   if (name === "reports") renderReports();
@@ -1956,6 +1964,7 @@ async function refreshCloudClassData(showErrors = false) {
         timestamp: log.signed_in_at,
         signOutTime: log.signed_out_at ? new Date(log.signed_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
         _ownerStaffId: log.staff_id || log.lecturer_id,
+        _ownerId: log.lecturer_id,
         _ownerName: log.lecturer_name || "Lecturer",
         _cloudRecord: true
       };
@@ -1966,7 +1975,7 @@ async function refreshCloudClassData(showErrors = false) {
       data.lecturersSummary = ownerAccounts.filter(account => account.role === "lecturer").map(account => {
         const lecturerClasses = data.classes.filter(cls => cls._ownerId === account.user_id);
         const classIds = new Set(lecturerClasses.map(cls => cls.id));
-        const lecturerLogs = data.teachingLogs.filter(log => log._ownerStaffId === account.user_id);
+        const lecturerLogs = data.teachingLogs.filter(log => log._ownerId === account.user_id);
         const lecturerAttendance = data.attendance.filter(record => classIds.has(record.classId));
         const todaysLogs = lecturerLogs.filter(log => log.date === todayKey);
         return {
@@ -3168,6 +3177,9 @@ function bindEvents() {
   $("filterReportsBtn").addEventListener("click", renderReports);
   $("exportReportBtn").addEventListener("click", exportReport);
   $("printReportBtn").addEventListener("click", printOfficialRegister);
+  $("adminExportMonthlyBtn")?.addEventListener("click", exportAdminMonthlySummary);
+  $("adminExportRiskBtn")?.addEventListener("click", exportAdminAtRiskStudents);
+  $("adminPrintMonthlyBtn")?.addEventListener("click", printAdminMonthlyReport);
 
   $("backupBtn").addEventListener("click", backupData);
   $("restoreInput").addEventListener("change", e => {
