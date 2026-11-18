@@ -838,6 +838,8 @@ function unlockApp(user) {
   $("institutionName").value = data.settings.institution || "";
   $("departmentName").value = data.settings.department || user.department || "";
   $("settingsPin").value = user.pin || data.settings.pin || "";
+  const adminPanel = $("adminSecurityPanel");
+  if (adminPanel) adminPanel.style.display = isAdminUser(user) ? "block" : "none";
 
   $("loginScreen").style.display = "none";
   $("appShell").style.display = "block";
@@ -969,6 +971,7 @@ function showView(name) {
   if (name === "students") renderStudents();
   if (name === "classes") renderClasses();
   if (name === "reports") renderReports();
+  if (name === "settings" && isAdminUser(currentLecturer)) loadAdminSecurityPanel();
 }
 
 /* =========================================
@@ -2603,6 +2606,86 @@ function restoreData(file) {
 }
 
 /* =========================================
+   SECURE ADMIN ACCOUNT DIRECTORY & AUDIT REVIEW
+   ========================================= */
+async function loadAdminSecurityPanel() {
+  if (!isAdminUser(currentLecturer)) return;
+  const accountsBody = $("adminAccountsTable");
+  const auditBody = $("adminAuditTable");
+  if (accountsBody) accountsBody.innerHTML = '<tr><td colspan="5" class="table-empty">Loading accounts...</td></tr>';
+  if (auditBody) auditBody.innerHTML = '<tr><td colspan="5" class="table-empty">Loading audit records...</td></tr>';
+
+  try {
+    const [{ data: accounts, error: accountError }, { data: logs, error: auditError }] = await Promise.all([
+      supabaseClient.rpc("admin_list_accounts"),
+      supabaseClient.from("audit_logs")
+        .select("id, actor_id, action, table_name, record_id, created_at")
+        .order("created_at", { ascending: false })
+        .limit(50)
+    ]);
+    if (accountError) throw accountError;
+    if (auditError) throw auditError;
+
+    const accountList = accounts || [];
+    const byId = new Map(accountList.map(account => [account.user_id, account]));
+    if (accountsBody) {
+      const lecturers = accountList.filter(account => account.role === "lecturer");
+      accountsBody.innerHTML = lecturers.length ? lecturers.map(account => {
+        const suspended = account.account_status === "suspended";
+        return `<tr>
+          <td>${escapeHTML(account.full_name || "Lecturer")}</td>
+          <td>${escapeHTML(account.email || "—")}</td>
+          <td>${escapeHTML(account.department || "—")}</td>
+          <td><span class="status-pill status-${suspended ? "Absent" : "Present"}">${suspended ? "Suspended" : "Active"}</span></td>
+          <td><button class="action-btn ${suspended ? "" : "delete"}" data-admin-account-status="${escapeHTML(account.user_id)}" data-next-status="${suspended ? "active" : "suspended"}">${suspended ? "Reactivate" : "Suspend"}</button></td>
+        </tr>`;
+      }).join("") : '<tr><td colspan="5" class="table-empty">No lecturer accounts found.</td></tr>';
+    }
+
+    if (auditBody) {
+      auditBody.innerHTML = (logs || []).length ? logs.map(log => {
+        const actor = byId.get(log.actor_id);
+        return `<tr>
+          <td>${escapeHTML(new Date(log.created_at).toLocaleString())}</td>
+          <td>${escapeHTML(actor?.email || (log.actor_id ? log.actor_id.slice(0, 8) : "System"))}</td>
+          <td>${escapeHTML(log.action)}</td>
+          <td>${escapeHTML(log.table_name)}</td>
+          <td>${escapeHTML(log.record_id || "—")}</td>
+        </tr>`;
+      }).join("") : '<tr><td colspan="5" class="table-empty">No audit activity recorded yet.</td></tr>';
+    }
+  } catch (error) {
+    console.error("Admin security panel failed:", error);
+    if (accountsBody) accountsBody.innerHTML = `<tr><td colspan="5" class="table-empty">${escapeHTML(error.message || "Could not load accounts.")}</td></tr>`;
+    if (auditBody) auditBody.innerHTML = `<tr><td colspan="5" class="table-empty">${escapeHTML(error.message || "Could not load audit records.")}</td></tr>`;
+  }
+}
+
+async function handleAdminSecurityActions(event) {
+  const button = event.target.closest("[data-admin-account-status]");
+  if (!button || !isAdminUser(currentLecturer)) return;
+  const userId = button.dataset.adminAccountStatus;
+  const nextStatus = button.dataset.nextStatus;
+  const label = nextStatus === "suspended" ? "suspend" : "reactivate";
+  if (!confirm(`Are you sure you want to ${label} this lecturer account?`)) return;
+
+  button.disabled = true;
+  try {
+    const { error } = await supabaseClient.rpc("admin_set_account_status", {
+      p_user_id: userId,
+      p_status: nextStatus
+    });
+    if (error) throw error;
+    toast(`Lecturer account ${nextStatus}.`);
+    await loadAdminSecurityPanel();
+  } catch (error) {
+    console.error("Lecturer status update failed:", error);
+    toast("Could not update lecturer account: " + (error.message || "Unknown error"));
+    button.disabled = false;
+  }
+}
+
+/* =========================================
    SETTINGS (ADMIN-ONLY ADMIN PASSWORD PROTECTION)
    ========================================= */
 
@@ -2733,6 +2816,8 @@ function bindEvents() {
     if (e.target.files[0]) restoreData(e.target.files[0]);
   });
   $("saveSettingsBtn").addEventListener("click", saveSettings);
+  $("refreshAdminPanelBtn")?.addEventListener("click", loadAdminSecurityPanel);
+  $("adminAccountsTable")?.addEventListener("click", handleAdminSecurityActions);
   $("clearDataBtn").addEventListener("click", clearAllData);
 }
 
