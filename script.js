@@ -1530,8 +1530,8 @@ async function handleSelfEnrollSubmit(event) {
 async function ensureCloudClass(classItem) {
   if (!currentLecturer?.id || !classItem?.id) throw new Error("Please sign in to your lecturer account first.");
   const { data: cloudClass, error } = await supabaseClient.from("classes").upsert({
-    id: classItem.id, owner_id: currentLecturer.id, name: classItem.name,
-    code: classItem.code || "", department: currentLecturer.department || "", enrollment_enabled: true
+    id: classItem.id, owner_id: classItem._ownerId || currentLecturer.id, name: classItem.name,
+    code: classItem.code || "", department: classItem.department || currentLecturer.department || "", enrollment_enabled: classItem.enrollmentEnabled !== false
   }, { onConflict: "id" }).select("id, enrollment_token").single();
   if (error) throw error;
   return cloudClass;
@@ -1635,31 +1635,46 @@ async function refreshCloudClassData(showErrors = false) {
   try {
     // Classes are the starting point. Fetch them by the authenticated lecturer's
     // Supabase user ID so a fresh browser can rebuild its workspace from cloud data.
-    const { data: cloudClasses, error: classError } = await supabaseClient
-      .from("classes")
-      .select("id, owner_id, name, code, department, enrollment_enabled, enrollment_token, created_at")
-      .eq("owner_id", currentLecturer.id);
+    const adminMode = isAdminUser(currentLecturer);
+    let classQuery = supabaseClient.from("classes")
+      .select("id, owner_id, name, code, department, enrollment_enabled, enrollment_token, created_at");
+    if (!adminMode) classQuery = classQuery.eq("owner_id", currentLecturer.id);
+    const { data: cloudClasses, error: classError } = await classQuery;
     if (classError) throw classError;
 
-    const remoteClasses = (cloudClasses || []).map(cls => ({
-      id: cls.id,
-      name: cls.name,
-      code: cls.code || "",
-      department: cls.department || currentLecturer.department || "",
-      enrollmentEnabled: cls.enrollment_enabled !== false,
-      enrollmentToken: cls.enrollment_token || "",
-      createdDate: cls.created_at ? cls.created_at.slice(0, 10) : today(),
-      _cloudRecord: true,
-      _ownerStaffId: currentLecturer.staffId
-    }));
+    let ownerAccounts = [];
+    if (adminMode) {
+      const { data: accounts, error: accountsError } = await supabaseClient.rpc("admin_list_accounts");
+      if (accountsError) throw accountsError;
+      ownerAccounts = accounts || [];
+    }
+    const ownerById = new Map(ownerAccounts.map(account => [account.user_id, account]));
+    const ownerByClassId = new Map((cloudClasses || []).map(cls => [cls.id, cls.owner_id]));
+    const remoteClasses = (cloudClasses || []).map(cls => {
+      const owner = ownerById.get(cls.owner_id);
+      const ownerLabel = owner?.full_name || owner?.email || "Lecturer";
+      return {
+        id: cls.id,
+        name: cls.name,
+        code: cls.code || "",
+        department: cls.department || "",
+        enrollmentEnabled: cls.enrollment_enabled !== false,
+        enrollmentToken: cls.enrollment_token || "",
+        createdDate: cls.created_at ? cls.created_at.slice(0, 10) : today(),
+        _cloudRecord: true,
+        _ownerId: cls.owner_id,
+        _ownerStaffId: adminMode ? cls.owner_id : currentLecturer.staffId,
+        _ownerName: adminMode ? ownerLabel : "",
+        displayName: adminMode ? `${cls.name} — [${ownerLabel}]` : cls.name
+      };
+    });
     const classIds = remoteClasses.map(cls => cls.id);
-    const previousClassIds = new Set(data.classes
-      .filter(cls => (cls._ownerStaffId || currentLecturer.staffId) === currentLecturer.staffId)
-      .map(cls => cls.id));
+    const previousClassIds = new Set(adminMode
+      ? data.classes.map(cls => cls.id)
+      : data.classes.filter(cls => (cls._ownerStaffId || currentLecturer.staffId) === currentLecturer.staffId).map(cls => cls.id));
 
-    // Replace this lecturer's cached classes with the authoritative cloud list,
-    // while retaining any other locally aggregated workspace entries.
-    data.classes = data.classes.filter(cls =>
+    // Admin sees the institution-wide cloud list; lecturers see only their own.
+    data.classes = adminMode ? remoteClasses : data.classes.filter(cls =>
       (cls._ownerStaffId || currentLecturer.staffId) !== currentLecturer.staffId
     ).concat(remoteClasses);
 
@@ -1679,7 +1694,8 @@ async function refreshCloudClassData(showErrors = false) {
         email: student.email || "",
         createdDate: student.created_at ? student.created_at.slice(0, 10) : today(),
         _cloudRecord: true,
-        _ownerStaffId: currentLecturer.staffId
+        _ownerStaffId: adminMode ? ownerByClassId.get(student.class_id) : currentLecturer.staffId,
+        _ownerName: adminMode ? (ownerById.get(ownerByClassId.get(student.class_id))?.email || "Lecturer") : ""
       }));
 
       const cloudByAdmission = new Map(remoteStudents.map(student => [
@@ -1715,7 +1731,8 @@ async function refreshCloudClassData(showErrors = false) {
         remarks: record.notes || "",
         createdAt: record.created_at,
         _cloudRecord: true,
-        _ownerStaffId: currentLecturer.staffId
+        _ownerStaffId: adminMode ? ownerByClassId.get(record.class_id) : currentLecturer.staffId,
+        _ownerName: adminMode ? (ownerById.get(ownerByClassId.get(record.class_id))?.email || "Lecturer") : ""
       }));
       const remoteAttendanceIds = new Set(remoteAttendance.map(record => record.id));
       data.attendance = data.attendance.filter(record =>
@@ -1824,11 +1841,11 @@ async function saveClass(event) {
     if (id) {
       const existing = data.classes.find(item => item.id === id);
       if (!existing) throw new Error("The class you are editing could not be found.");
-      const { data: updated, error } = await supabaseClient
-        .from("classes")
-        .update({ name, code, department: currentLecturer.department || "" })
-        .eq("id", id)
-        .eq("owner_id", currentLecturer.id)
+      let classUpdate = supabaseClient.from("classes")
+        .update({ name, code, department: currentLecturer.department || existing.department || "" })
+        .eq("id", id);
+      if (!isAdminUser(currentLecturer)) classUpdate = classUpdate.eq("owner_id", currentLecturer.id);
+      const { data: updated, error } = await classUpdate
         .select("id, owner_id, name, code, department, enrollment_enabled, enrollment_token, created_at")
         .single();
       if (error) throw error;
@@ -1888,7 +1905,7 @@ async function saveClass(event) {
     }
   }
 }
-function handleClassActions(event) {
+async function handleClassActions(event) {
   const teachButton = event.target.closest("[data-teach-class]");
   const enrollButton = event.target.closest("[data-enroll-class]");
   const editButton = event.target.closest("[data-edit-class]");
@@ -1907,13 +1924,23 @@ function handleClassActions(event) {
       return;
     }
     if (confirm("Delete this class, its teaching logs, and its attendance records?")) {
-      data.classes = data.classes.filter(item => item.id !== id);
-      data.attendance = data.attendance.filter(record => record.classId !== id);
-      data.teachingLogs = (data.teachingLogs || []).filter(log => log.classId !== id);
-      saveData();
-      renderClasses();
-      renderDashboard();
-      toast("Class deleted.");
+      try {
+        let deletion = supabaseClient.from("classes").delete().eq("id", id);
+        if (!isAdminUser(currentLecturer)) deletion = deletion.eq("owner_id", currentLecturer.id);
+        const { error } = await deletion;
+        if (error) throw error;
+        data.classes = data.classes.filter(item => item.id !== id);
+        data.attendance = data.attendance.filter(record => record.classId !== id);
+        data.students = data.students.filter(student => student.classId !== id);
+        data.teachingLogs = (data.teachingLogs || []).filter(log => log.classId !== id);
+        saveData();
+        renderClasses();
+        renderDashboard();
+        toast("Class deleted from Supabase.");
+      } catch (error) {
+        console.error("Class deletion failed:", error);
+        toast("Could not delete class: " + (error.message || "Check permissions."));
+      }
     }
   }
 }
