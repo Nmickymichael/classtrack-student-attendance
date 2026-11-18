@@ -966,6 +966,74 @@ function populateClassSelects() {
    DASHBOARD, LECTURER TRACKING & AT-RISK ALERTS
    ========================================= */
 
+
+function getAdminMonthlyAttendanceRecords() {
+  const monthKey = today().slice(0, 7);
+  return data.attendance.filter(record => String(record.date || "").slice(0, 7) === monthKey);
+}
+
+function exportAdminMonthlySummary() {
+  if (!isAdminUser(currentLecturer)) return;
+  const groups = new Map();
+  getAdminMonthlyAttendanceRecords().forEach(record => {
+    const key = record.date + "|" + record.classId;
+    if (!groups.has(key)) groups.set(key, { date: record.date, classId: record.classId, present: 0, absent: 0, late: 0, excused: 0, total: 0 });
+    const item = groups.get(key);
+    item.total++;
+    if (record.status === "Present") item.present++;
+    if (record.status === "Absent") item.absent++;
+    if (record.status === "Late") item.late++;
+    if (record.status === "Excused") item.excused++;
+  });
+  const headers = ["Date", "Class / Unit", "Lecturer", "Present", "Late", "Absent", "Excused", "Total", "Attendance Rate"];
+  const rows = [...groups.values()].sort((a, b) => a.date.localeCompare(b.date)).map(item => {
+    const cls = data.classes.find(entry => entry.id === item.classId);
+    const rate = item.total ? Math.round(((item.present + item.late) / item.total) * 100) : 0;
+    return [item.date, cls?.name || "Unknown class", cls?._ownerName || "—", item.present, item.late, item.absent, item.excused, item.total, rate + "%"];
+  });
+  const csv = [headers, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n");
+  downloadFile("classtrack-monthly-attendance-" + today().slice(0, 7) + ".csv", "\uFEFF" + csv, "text/csv;charset=utf-8");
+  toast("Monthly institutional attendance summary exported.");
+}
+
+function exportAdminAtRiskStudents() {
+  if (!isAdminUser(currentLecturer)) return;
+  const rows = data.students.map(student => ({ student, stats: getStudentAttendanceStats(student.id) }))
+    .filter(item => item.stats.total > 0 && item.stats.rate < 75)
+    .sort((a, b) => a.stats.rate - b.stats.rate);
+  const headers = ["Student", "Admission Number", "Class / Unit", "Lecturer", "Present or Late", "Sessions", "Attendance Rate", "Alert"];
+  const csvRows = rows.map(({ student, stats }) => {
+    const cls = data.classes.find(item => item.id === student.classId);
+    return [student.name, student.admission, cls?.name || "—", cls?._ownerName || "—", stats.attended, stats.total, stats.rate + "%", "Below 75%"];
+  });
+  const csv = [headers, ...csvRows].map(row => row.map(csvCell).join(",")).join("\r\n");
+  downloadFile("classtrack-low-attendance-alerts-" + today() + ".csv", "\uFEFF" + csv, "text/csv;charset=utf-8");
+  toast(rows.length + " low-attendance student alert(s) exported.");
+}
+
+function printAdminMonthlyReport() {
+  if (!isAdminUser(currentLecturer)) return;
+  $("reportPeriod").value = "month";
+  $("reportClass").value = "";
+  renderReports();
+  printOfficialRegister();
+}
+
+function renderAdminReportingHub() {
+  const panel = $("adminReportingHub");
+  if (!panel) return;
+  const adminMode = isAdminUser(currentLecturer);
+  panel.hidden = !adminMode;
+  if (!adminMode) return;
+  const monthly = getAdminMonthlyAttendanceRecords();
+  const riskCount = data.students.filter(student => {
+    const stats = getStudentAttendanceStats(student.id);
+    return stats.total > 0 && stats.rate < 75;
+  }).length;
+  $("adminMonthlyRecordCount").textContent = monthly.length.toLocaleString();
+  $("adminRiskExportCount").textContent = riskCount.toLocaleString();
+}
+
 function renderDashboard() {
   const adminMode = isAdminUser(currentLecturer);
   const date = today();
