@@ -53,8 +53,7 @@ const makeId = () => crypto.randomUUID
   ? crypto.randomUUID()
   : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-const isAdminUser = (user) =>
-  String(user?.staffId || "").trim().toLowerCase() === "admin";
+const isAdminUser = (user) => user?.role === "admin";
 
 const getWorkspaceKey = (staffId) =>
   `classtrack_workspace_${String(staffId || "admin").trim().toLowerCase()}`;
@@ -614,15 +613,35 @@ function checkUrlPortalMode() {
 
 // Convert Supabase user into the format
 // already used by the ClassTrack interface.
-function authUserToLecturer(user) {
+async function authUserToLecturer(user) {
   const metadata = user.user_metadata || {};
+  const { data: roleRecord, error } = await supabaseClient
+    .from("user_roles")
+    .select("role, account_status")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("Could not verify your ClassTrack permissions. Apply the production admin migration first. " + error.message);
+  }
+  if (!roleRecord) {
+    throw new Error("Your account has no ClassTrack role. Contact the System Administrator.");
+  }
+  if (roleRecord.account_status !== "active") {
+    throw new Error("Your ClassTrack account is suspended. Contact the System Administrator.");
+  }
+  if (roleRecord.role === "student") {
+    throw new Error("This is a student account. Please use the Student Portal.");
+  }
 
   return {
     id: user.id,
     name: metadata.full_name || user.email,
     staffId: user.email,
     department: metadata.department || "Computing & Informatics Department",
-    email: user.email
+    email: user.email,
+    role: roleRecord.role,
+    accountStatus: roleRecord.account_status
   };
 }
 
@@ -635,7 +654,7 @@ async function checkAuth() {
     if (error) throw error;
 
     if (session?.user) {
-      unlockApp(authUserToLecturer(session.user));
+      unlockApp(await authUserToLecturer(session.user));
     } else {
       $("loginScreen").style.display = "grid";
       $("appShell").style.display = "none";
@@ -707,7 +726,7 @@ async function handleSignUp(event) {
     $("signUpForm").reset();
 
     if (result.session && result.user) {
-      unlockApp(authUserToLecturer(result.user));
+      unlockApp(await authUserToLecturer(result.user));
       toast("Welcome to ClassTrack, " + name + "!");
     } else {
       toggleAuthMode("signin");
@@ -755,7 +774,7 @@ async function handleLogin(event) {
 
     $("loginPin").value = "";
 
-    unlockApp(authUserToLecturer(result.user));
+    unlockApp(await authUserToLecturer(result.user));
 
     toast("Welcome back to ClassTrack!");
 
