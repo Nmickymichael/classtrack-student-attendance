@@ -53,6 +53,8 @@ const makeId = () => crypto.randomUUID
   ? crypto.randomUUID()
   : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+const normalizeAdmissionNumber = (value) => String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+
 const isAdminUser = (user) => user?.role === "admin";
 
 const getWorkspaceKey = (staffId) =>
@@ -1297,6 +1299,7 @@ function openStudent(id = "") {
     $("studentAdmission").value = student.admission;
     $("studentClass").value = student.classId;
     $("studentPhone").value = student.phone || "";
+    $("studentEmail").value = student.email || "";
   }
 
   $("studentDialog").showModal();
@@ -1309,14 +1312,15 @@ async function saveStudent(event) {
   const admission = $("studentAdmission").value.trim();
   const classId = $("studentClass").value;
   const phone = $("studentPhone").value.trim();
+  const email = $("studentEmail").value.trim().toLowerCase();
 
-  if (!name || !admission || !classId) {
+  if (!name || !admission || !classId || !email) {
     toast("Please complete all required fields.");
     return;
   }
 
   const duplicate = data.students.find(
-    student => student.classId === classId && student.admission.toLowerCase() === admission.toLowerCase() && student.id !== id
+    student => student.classId === classId && normalizeAdmissionNumber(student.admission) === normalizeAdmissionNumber(admission) && student.id !== id
   );
   if (duplicate) {
     alert("That admission number is already registered in this unit.");
@@ -1335,7 +1339,7 @@ async function saveStudent(event) {
   }
 
   const updatedStudent = {
-    ...student, name, admission, classId, phone,
+    ...student, name, admission: admission.trim(), classId, phone, email,
     _ownerStaffId: ownerStaffId
   };
   const submitButton = $("studentForm").querySelector('button[type="submit"]');
@@ -1551,7 +1555,7 @@ async function saveStudentToCloud(student) {
     full_name: student.name,
     admission_number: student.admission,
     phone: student.phone || "",
-    email: student.email || null
+    email: student.email ? student.email.trim().toLowerCase() : null
   };
   const { data: savedStudent, error } = await supabaseClient
     .from("students")
@@ -2014,60 +2018,22 @@ async function startQrSession() {
 }
 
 async function finalizeQrSessionAttendance(session, options = {}) {
-  if (!session?.classId || !session?.date) return 0;
+  if (!session?.cloudSessionId) return 0;
   if (session.finalizing) return 0;
   session.finalizing = true;
 
   try {
-    const roster = data.students.filter(student => student.classId === session.classId);
-    if (!roster.length) return 0;
-
-    const existingByStudent = new Map(
-      data.attendance
-        .filter(record => record.classId === session.classId && record.date === session.date)
-        .map(record => [record.studentId, record])
-    );
-    const registerMatchesSession =
-      $("attendanceClass")?.value === session.classId &&
-      $("attendanceDate")?.value === session.date;
-    const registerRows = registerMatchesSession
-      ? [...($("registerArea")?.querySelectorAll("[data-register-row]") || [])]
-      : [];
-    const rowByStudent = new Map(registerRows.map(row => [row.dataset.registerRow, row]));
-    const ownerStaffId = session.ownerId || currentLecturer?.staffId || "admin";
-    let autoAbsentCount = 0;
-
-    const pendingRecords = roster.map(student => {
-      const existing = existingByStudent.get(student.id);
-      const row = rowByStudent.get(student.id);
-      const selectedStatus = row?.querySelector(".status-option.selected")?.dataset.status;
-      const status = selectedStatus || existing?.status || "Absent";
-      if (!selectedStatus && !existing) autoAbsentCount++;
-
-      return {
-        id: existing?.id || makeId(),
-        studentId: student.id,
-        classId: session.classId,
-        date: session.date,
-        status,
-        remarks: row?.querySelector("[data-remarks]")?.value.trim() ||
-          existing?.remarks ||
-          (status === "Absent" && !existing ? "Automatically marked absent when attendance closed" : ""),
-        createdAt: existing?.createdAt || new Date().toISOString(),
-        _ownerStaffId: ownerStaffId
-      };
+    // Database transaction is authoritative and can run without this browser.
+    const { data: result, error } = await supabaseClient.rpc("finalize_attendance_session", {
+      p_session_id: session.cloudSessionId
     });
+    if (error) throw error;
 
-    const saved = await saveAttendanceBatchToCloud(pendingRecords);
-    saved.forEach(record => {
-      const index = data.attendance.findIndex(item => item.id === record.id);
-      if (index >= 0) data.attendance[index] = record;
-      else data.attendance.push(record);
-    });
-    saveData();
+    await refreshCloudClassData();
     renderDashboard();
-    if (registerMatchesSession) renderRegister();
-    return autoAbsentCount;
+    if ($("attendanceClass")?.value === session.classId &&
+        $("attendanceDate")?.value === session.date) renderRegister();
+    return Number(result?.absent_count || 0);
   } catch (error) {
     console.error("Could not finalize session attendance:", error);
     throw error;
