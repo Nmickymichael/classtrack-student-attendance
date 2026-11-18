@@ -74,8 +74,6 @@ Use fictional sample data in screenshots. If the project was made for or with an
 
 ## Author
 
-**Michael Harrison Muthee Muriithi**
-
-Project Developer | ICT Student
+Developed by Mickoryn
 
 ClassTrack — Student Class Attendance Management System
