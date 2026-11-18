@@ -771,3 +771,15 @@ tbody tr:last-child td { border-bottom: 0; }
 .enrollment-pill.pending { background:#fff5e8; color:#a66b1e; }
 .enrollment-metrics { margin:14px 0 18px; }
 .enrollment-metrics .stat-card { min-height:88px; }
+
+/* GLOBAL ADMIN PORTAL */
+.nav-link[hidden], .view[hidden], [hidden].admin-reporting-hub { display:none !important; }
+.admin-reporting-hub { margin-bottom:18px; }
+.admin-export-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+.admin-report-note { margin-top:12px; }
+.teaching-live-summary { display:flex; flex-wrap:wrap; gap:12px; margin:12px 0 16px; }
+.teaching-live-summary > div { display:flex; align-items:center; gap:8px; padding:10px 14px; border:1px solid var(--border, #e4e9f1); border-radius:12px; }
+.teaching-live-summary strong { font-size:20px; }
+.teaching-live-summary small { color:var(--muted, #718096); }
+.live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#16a36a; box-shadow:0 0 0 3px rgba(22,163,106,.14); vertical-align:middle; }
+@media print { .admin-reporting-hub, .admin-export-actions { display:none !important; } }
