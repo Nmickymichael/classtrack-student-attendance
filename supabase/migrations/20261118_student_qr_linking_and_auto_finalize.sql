@@ -130,6 +130,7 @@ declare
   v_class_id uuid;
   v_student_id uuid;
   v_existing_user uuid;
+  v_existing_email text;
   v_admission text := public.classtrack_normalize_admission(p_admission_number);
 begin
   if v_user_id is null or v_email = '' then
@@ -149,7 +150,8 @@ begin
     raise exception 'This registration QR code is invalid or has been disabled.';
   end if;
 
-  select s.id, s.user_id into v_student_id, v_existing_user
+  select s.id, s.user_id, lower(trim(coalesce(s.email, '')))
+    into v_student_id, v_existing_user, v_existing_email
   from public.students s
   where s.class_id = v_class_id
     and public.classtrack_normalize_admission(s.admission_number) = v_admission
@@ -158,6 +160,9 @@ begin
   if v_student_id is not null then
     if v_existing_user is not null and v_existing_user <> v_user_id then
       raise exception 'This admission number is already linked to another student account.';
+    end if;
+    if v_existing_user is null and v_existing_email <> '' and v_existing_email <> v_email then
+      raise exception 'This admission number is registered to a different student email address.';
     end if;
 
     update public.students
