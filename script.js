@@ -1134,8 +1134,8 @@ function renderDashboard() {
     adminTrackerPanel.innerHTML = `
       <div class="panel-header">
         <div>
-          <h3>Lecturer Performance, Teaching Audit & Credential Support (Admin Only)</h3>
-          <p>Verify lecturer class sign-ins, attendance rates, or reset a lecturer's forgotten PIN</p>
+          <h3>Lecturer Performance &amp; Teaching Oversight</h3>
+          <p>Institution-wide teaching activity and attendance performance from Supabase</p>
         </div>
         <span class="date-chip">${summaries.length} Lecturer${summaries.length === 1 ? "" : "s"}</span>
       </div>
@@ -1150,7 +1150,7 @@ function renderDashboard() {
               <th>Lessons Signed In</th>
               <th>Teaching Status</th>
               <th>Attendance</th>
-              <th>Account Assistance</th>
+              <th>Account Status</th>
             </tr>
           </thead>
           <tbody>
@@ -1165,9 +1165,7 @@ function renderDashboard() {
                     statusPill = `<span class="rate-pill rate-low">Not signed in today</span>`;
                   }
 
-                  const assistBtn = l.isAdmin
-                    ? `<small style="color:#8c98aa;">Admin Account</small>`
-                    : `<button type="button" class="action-btn" data-reset-lec-pin="${escapeHTML(l.staffId)}">🔑 Reset PIN</button>`;
+                  const accountStatusLabel = l.accountStatus === "active" ? "Active" : l.accountStatus === "suspended" ? "Suspended" : "Pending";
 
                   return `
                     <tr>
@@ -1181,7 +1179,7 @@ function renderDashboard() {
                         ? `<span class="rate-pill rate-neutral">No sessions</span>`
                         : `<span class="rate-pill ${l.attendanceRate >= 75 ? "rate-good" : "rate-low"}">${l.attendanceRate}%</span>`
                       }</td>
-                      <td>${assistBtn}</td>
+                      <td><span class="rate-pill ${l.accountStatus === "active" ? "rate-good" : "rate-low"}">${accountStatusLabel}</span></td>
                     </tr>
                   `;
                 }).join("")
@@ -1191,10 +1189,6 @@ function renderDashboard() {
         </table>
       </div>
     `;
-
-    adminTrackerPanel.querySelectorAll("[data-reset-lec-pin]").forEach(btn => {
-      btn.addEventListener("click", () => adminResetLecturerPin(btn.dataset.resetLecPin));
-    });
 
     const allTeachingLogs = data.teachingLogs || [];
     const todayLogs = allTeachingLogs.filter(log => log.date === today());
@@ -1991,6 +1985,7 @@ async function refreshCloudClassData(showErrors = false) {
           lessonsSignedIn: lecturerLogs.length,
           signedInToday: todaysLogs.some(log => log.status === "Signed In · Teaching"),
           completedToday: todaysLogs.some(log => log.status !== "Signed In · Teaching"),
+          accountStatus: account.account_status || "pending",
           attendanceRate: lecturerAttendance.length
             ? Math.round((lecturerAttendance.filter(record => record.status === "Present" || record.status === "Late").length / lecturerAttendance.length) * 100)
             : null
