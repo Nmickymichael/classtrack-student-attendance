@@ -1460,6 +1460,12 @@ async function saveStudent(event) {
   const classId = $("studentClass").value;
   const phone = $("studentPhone").value.trim();
   const email = $("studentEmail").value.trim().toLowerCase();
+  const existingStudent = id ? data.students.find(item => item.id === id) : null;
+
+  if (existingStudent?.userId && String(existingStudent.email || "").trim().toLowerCase() !== email) {
+    toast("This student account is already linked. Change the email in Supabase Auth and confirm it; ClassTrack will update the roster email automatically.");
+    return;
+  }
 
   if (!name || !admission || !classId || !email) {
     toast("Please complete all required fields.");
