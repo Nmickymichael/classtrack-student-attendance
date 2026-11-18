@@ -791,6 +791,14 @@ function unlockApp(user) {
   if (adminPanel) adminPanel.style.display = adminMode ? "block" : "none";
   const attendanceNav = document.querySelector('.nav-link[data-view="attendance"]');
   if (attendanceNav) attendanceNav.hidden = adminMode;
+  const navLabels = adminMode
+    ? { dashboard: "▦ Institutional Overview", students: "♙ All Students", classes: "▤ All Classes", reports: "▥ Global Reports", settings: "⚙ Admin Controls" }
+    : { dashboard: "▦ Dashboard", students: "♙ Students", classes: "▤ Classes", attendance: "✓ Take attendance", reports: "▥ Reports", settings: "⚙ Settings & backup" };
+  document.querySelectorAll(".nav-link[data-view]").forEach(button => {
+    if (navLabels[button.dataset.view]) button.textContent = navLabels[button.dataset.view];
+  });
+  const settingsNav = document.querySelector('.sidebar-bottom .nav-link[data-view="settings"]');
+  if (settingsNav) settingsNav.textContent = navLabels.settings;
   const attendanceView = $("view-attendance");
   if (attendanceView) attendanceView.hidden = adminMode;
   const reportingHub = $("adminReportingHub");
