@@ -1264,6 +1264,114 @@ function renderDashboard() {
    STUDENT MANAGEMENT
    ========================================= */
 
+
+function parseStudentCsv(text) {
+  const rows = [];
+  let row = [], value = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"') {
+      if (quoted && text[i + 1] === '"') { value += '"'; i++; }
+      else quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(value.trim()); value = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && text[i + 1] === "\n") i++;
+      row.push(value.trim()); value = "";
+      if (row.some(cell => cell !== "")) rows.push(row);
+      row = [];
+    } else value += char;
+  }
+  row.push(value.trim());
+  if (row.some(cell => cell !== "")) rows.push(row);
+  if (!rows.length) return [];
+  const headers = rows.shift().map((header, index) =>
+    header.replace(/^\uFEFF/, "").trim().toLowerCase().replace(/[\s-]+/g, "_")
+  );
+  return rows.map(cells => Object.fromEntries(headers.map((header, index) => [header, cells[index] || ""])));
+}
+
+function downloadStudentCsvTemplate() {
+  const csv = "full_name,admission_number,class_name,email,phone\nJane Wanjiku,T1211/551766/2024,Diploma in ICT - Year 1,jane@example.com,0712345678\n";
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "classtrack-student-enrollment-template.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importStudentsCsv(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const button = $("studentCsvImport")?.closest("label");
+    if (button) button.style.pointerEvents = "none";
+    try {
+      const rows = parseStudentCsv(String(reader.result || ""));
+      if (!rows.length) throw new Error("The CSV file is empty or could not be read.");
+      const required = ["full_name", "admission_number", "class_name", "email"];
+      const missing = required.filter(key => !(key in rows[0]));
+      if (missing.length) throw new Error("Missing CSV columns: " + missing.join(", ") + ". Download the template and use its column headings.");
+
+      let imported = 0;
+      const issues = [];
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index];
+        const rowNumber = index + 2;
+        const name = String(row.full_name || "").trim();
+        const admission = String(row.admission_number || "").trim();
+        const className = String(row.class_name || "").trim();
+        const email = String(row.email || "").trim().toLowerCase();
+        const phone = String(row.phone || "").trim();
+        const cls = data.classes.find(item => item.name.trim().toLowerCase() === className.toLowerCase());
+        if (!name || !admission || !email || !className || !cls) {
+          issues.push("Row " + rowNumber + ": missing required data or class not found (" + className + ").");
+          continue;
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          issues.push("Row " + rowNumber + ": invalid email address.");
+          continue;
+        }
+        const duplicate = data.students.some(student =>
+          student.classId === cls.id &&
+          normalizeAdmissionNumber(student.admission) === normalizeAdmissionNumber(admission)
+        );
+        if (duplicate) {
+          issues.push("Row " + rowNumber + ": admission number already exists in " + cls.name + ".");
+          continue;
+        }
+        const student = {
+          id: makeId(), name, admission, classId: cls.id, email, phone,
+          userId: null, createdDate: today(),
+          _ownerStaffId: cls._ownerStaffId || currentLecturer?.staffId || "admin"
+        };
+        try {
+          const saved = await saveStudentToCloud(student);
+          data.students.push(saved);
+          imported++;
+        } catch (error) {
+          issues.push("Row " + rowNumber + ": " + (error.message || "Supabase save failed."));
+        }
+      }
+      saveData();
+      renderStudents();
+      renderDashboard();
+      const summary = imported + " student record(s) imported.";
+      toast(summary + (issues.length ? " " + issues.length + " row(s) need attention." : ""));
+      if (issues.length) alert(summary + "\n\nPlease correct these rows and import them again:\n" + issues.slice(0, 20).join("\n") + (issues.length > 20 ? "\n…and " + (issues.length - 20) + " more." : ""));
+    } catch (error) {
+      alert(error.message || "Could not import this CSV file.");
+    } finally {
+      $("studentCsvImport").value = "";
+      if (button) button.style.pointerEvents = "";
+    }
+  };
+  reader.onerror = () => alert("Could not read the selected CSV file.");
+  reader.readAsText(file);
+}
+
 function renderStudents() {
   populateClassSelects();
 
@@ -1314,7 +1422,7 @@ function renderStudents() {
           </tr>
         `;
       }).join("")
-    : `<tr><td colspan="6" class="table-empty">${data.students.length ? "No students match your search." : "No students registered yet."}</td></tr>`;
+    : `<tr><td colspan="7" class="table-empty">${data.students.length ? "No students match your search." : "No students registered yet."}</td></tr>`;
 }
 
 function openStudent(id = "") {
@@ -2905,6 +3013,8 @@ function bindEvents() {
   $("studentsTable").addEventListener("click", handleStudentActions);
   $("studentSearch").addEventListener("input", renderStudents);
   $("studentClassFilter").addEventListener("change", renderStudents);
+  $("downloadStudentCsvTemplate").addEventListener("click", downloadStudentCsvTemplate);
+  $("studentCsvImport").addEventListener("change", event => importStudentsCsv(event.target.files?.[0]));
 
   $("addClassBtn").addEventListener("click", () => openClass());
   $("classForm").addEventListener("submit", saveClass);
