@@ -7,6 +7,7 @@ const studentParams = new URLSearchParams(window.location.search);
 const studentMode = studentParams.get("mode") || "register";
 const enrollmentToken = studentParams.get("token");
 const attendanceToken = studentParams.get("session");
+const normalizeStudentAdmission = value => String(value || "").trim().toUpperCase().replace(/\s+/g, "");
 
 const byId = id => document.getElementById(id);
 const loginForm = byId("studentLoginForm");
@@ -82,7 +83,7 @@ async function submitStudentCheckin(event) {
     return;
   }
   const button = byId("studentCheckinButton");
-  const admissionNumber = byId("studentCheckinAdmission").value.trim().toLowerCase();
+  const admissionNumber = normalizeStudentAdmission(byId("studentCheckinAdmission").value);
   if (!admissionNumber) {
     studentMessage("Enter your admission number to continue.", true);
     return;
