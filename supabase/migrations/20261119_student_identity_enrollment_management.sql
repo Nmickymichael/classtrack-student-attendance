@@ -248,20 +248,20 @@ set search_path = ''
 as $
 begin
   if tg_op = 'INSERT' then
-    if new.user_id is not null and current_user not in ('postgres', 'supabase_admin') then
+    if new.user_id is not null and current_user not in ('postgres', 'supabase_admin', 'service_role') then
       raise exception 'Student accounts can only be linked through the verified enrollment process.';
     end if;
     return new;
   end if;
 
   if new.user_id is distinct from old.user_id
-     and current_user not in ('postgres', 'supabase_admin') then
+     and current_user not in ('postgres', 'supabase_admin', 'service_role') then
     raise exception 'Student account links can only be changed through the verified enrollment process.';
   end if;
 
   if old.user_id is not null
      and lower(trim(coalesce(new.email, ''))) <> lower(trim(coalesce(old.email, '')))
-     and current_user not in ('postgres', 'supabase_admin') then
+     and current_user not in ('postgres', 'supabase_admin', 'service_role') then
     raise exception 'This student account is already linked. Change the email in Supabase Auth and confirm it; ClassTrack will synchronize the verified email.';
   end if;
 
@@ -314,8 +314,9 @@ begin
 
   select jsonb_build_object(
     'total', count(*),
-    'linked', count(*) filter (where s.user_id is not null),
+    'linked', count(*) filter (where s.user_id is not null and u.email_confirmed_at is not null),
     'unlinked', count(*) filter (where s.user_id is null),
+    'awaiting_verification', count(*) filter (where s.user_id is not null and u.email_confirmed_at is null),
     'missing_email', count(*) filter (where nullif(trim(coalesce(s.email, '')), '') is null),
     'attention', coalesce((
       select jsonb_agg(item order by item->>'full_name')
@@ -329,23 +330,27 @@ begin
           'issue', case
             when nullif(trim(coalesce(st.email, '')), '') is null then 'Missing login email'
             when st.user_id is null then 'Account not linked'
+            when linked_user.email_confirmed_at is null then 'Awaiting email verification'
             else 'Needs review'
           end
         ) as item
         from public.students st
         join public.classes c on c.id = st.class_id
+        left join auth.users linked_user on linked_user.id = st.user_id
         where st.user_id is null
            or nullif(trim(coalesce(st.email, '')), '') is null
+           or linked_user.email_confirmed_at is null
         order by st.full_name
         limit 200
       ) attention_rows
     ), '[]'::jsonb)
   )
   into v_report
-  from public.students s;
+  from public.students s
+  left join auth.users u on u.id = s.user_id;
 
   return coalesce(v_report, jsonb_build_object(
-    'total', 0, 'linked', 0, 'unlinked', 0, 'missing_email', 0, 'attention', '[]'::jsonb
+    'total', 0, 'linked', 0, 'unlinked', 0, 'awaiting_verification', 0, 'missing_email', 0, 'attention', '[]'::jsonb
   ));
 end;
 $$;
