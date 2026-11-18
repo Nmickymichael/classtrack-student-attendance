@@ -1702,7 +1702,7 @@ async function refreshCloudClassData(showErrors = false) {
         student.classId + "|" + String(student.admission || "").toLowerCase(), student
       ]));
       const replacedStudentIds = new Map();
-      const retainedStudents = data.students.filter(student => {
+      const retainedStudents = adminMode ? [] : data.students.filter(student => {
         if (!classIds.includes(student.classId)) return true;
         const match = cloudByAdmission.get(student.classId + "|" + String(student.admission || "").toLowerCase());
         if (match && student.id !== match.id) replacedStudentIds.set(student.id, match.id);
@@ -1735,7 +1735,7 @@ async function refreshCloudClassData(showErrors = false) {
         _ownerName: adminMode ? (ownerById.get(ownerByClassId.get(record.class_id))?.email || "Lecturer") : ""
       }));
       const remoteAttendanceIds = new Set(remoteAttendance.map(record => record.id));
-      data.attendance = data.attendance.filter(record =>
+      data.attendance = adminMode ? remoteAttendance : data.attendance.filter(record =>
         !classIds.includes(record.classId) || (!record._cloudRecord && !remoteAttendanceIds.has(record.id))
       ).concat(remoteAttendance);
     } else {
