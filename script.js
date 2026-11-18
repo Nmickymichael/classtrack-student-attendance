@@ -360,60 +360,85 @@ function adminResetLecturerPin(targetStaffId) {
    LECTURER CLASS SIGN-IN (TEACHING VERIFICATION)
    ========================================= */
 
-function recordLecturerTeachingSignIn(classId, topic = "", silent = false) {
+async function recordLecturerTeachingSignIn(classId, topic = "", venue = "", silent = false) {
   const cls = data.classes.find(c => c.id === classId);
-  if (!cls) return;
+  if (!cls) throw new Error("The selected class could not be found.");
+  if (!currentLecturer?.id) throw new Error("Please sign in again before recording a teaching sign-in.");
 
   if (!Array.isArray(data.teachingLogs)) data.teachingLogs = [];
   const dateStr = today();
-  const timeStr = nowTimeFormatted();
-  const ownerId = cls._ownerStaffId || currentLecturer?.staffId || "admin";
+  const ownerId = cls._ownerStaffId || currentLecturer.staffId || "admin";
   const activeToday = data.teachingLogs.find(
     log => log.classId === classId && log.date === dateStr && log.status === "Signed In · Teaching"
   );
-
-  // QR launch can reuse the lecturer's already-open lesson; a manual sign-in
-  // while active must not inflate the lesson counter with duplicate entries.
   if (activeToday) {
-    if (silent) return activeToday;
-    toast(`You are already signed in to teach ${cls.name}. Sign out before starting another lesson.`);
+    if (!silent) toast(`You are already signed in to teach ${cls.name}. Sign out before starting another lesson.`);
     return activeToday;
   }
 
+  const cloudClass = await ensureCloudClass(cls);
   const startedAt = new Date().toISOString();
-  const lessonLog = {
-    id: makeId(),
-    classId,
-    className: cls.name,
-    classCode: cls.code || "",
-    date: dateStr,
-    time: timeStr,
+  const payload = {
+    lecturer_id: currentLecturer.id,
+    lecturer_name: currentLecturer.name || currentLecturer.email || "Lecturer",
+    staff_id: currentLecturer.staffId || "",
+    class_id: cloudClass.id,
+    class_name: cls.name,
+    class_code: cls.code || "",
     topic: topic || "Scheduled Lecture / Practical Session",
-    status: "Signed In · Teaching",
-    timestamp: startedAt,
-    _ownerStaffId: ownerId
+    venue: venue || "",
+    signed_in_at: startedAt,
+    status: "Signed In · Teaching"
+  };
+  const { data: savedLog, error } = await supabaseClient
+    .from("lecturer_sign_ins")
+    .insert(payload)
+    .select("id, lecturer_id, lecturer_name, staff_id, class_id, class_name, class_code, topic, venue, signed_in_at, signed_out_at, status")
+    .single();
+  if (error) throw error;
+
+  const signedAt = new Date(savedLog.signed_in_at);
+  const lessonLog = {
+    id: savedLog.id,
+    classId: savedLog.class_id,
+    className: savedLog.class_name,
+    classCode: savedLog.class_code || "",
+    date: savedLog.signed_in_at.slice(0, 10),
+    time: signedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    topic: savedLog.topic || "",
+    venue: savedLog.venue || "",
+    status: savedLog.status,
+    timestamp: savedLog.signed_in_at,
+    _ownerStaffId: savedLog.staff_id || ownerId,
+    _ownerName: savedLog.lecturer_name,
+    _cloudRecord: true
   };
   data.teachingLogs.push(lessonLog);
-
-  if (saveData() && !silent) {
+  saveData();
+  if (!silent) {
     renderClasses();
     renderDashboard();
-    toast(`✓ Signed in to teach ${cls.name} at ${timeStr}`);
+    toast(`✓ Signed in to teach ${cls.name} at ${lessonLog.time}`);
   }
   return lessonLog;
 }
 
-function promptLecturerClassSignIn(classId) {
+async function promptLecturerClassSignIn(classId) {
   const cls = data.classes.find(c => c.id === classId);
   if (!cls) return;
-
   const topicInput = prompt(
-    `Confirm Class Sign-In for:\n${cls.name}${cls.code ? ` (${cls.code})` : ""}\n\nEnter lesson topic or room/venue (optional):`,
+    `Confirm Class Sign-In for:\n${cls.name}${cls.code ? ` (${cls.code})` : ""}\n\nEnter lesson topic:`,
     "Lecture Session"
   );
   if (topicInput === null) return;
-
-  recordLecturerTeachingSignIn(classId, topicInput.trim() || "Lecture Session", false);
+  const venueInput = prompt("Enter teaching venue / room (optional):", "");
+  if (venueInput === null) return;
+  try {
+    await recordLecturerTeachingSignIn(classId, topicInput.trim() || "Lecture Session", venueInput.trim(), false);
+  } catch (error) {
+    console.error("Lecturer teaching sign-in failed:", error);
+    toast("Could not record teaching sign-in in Supabase: " + (error.message || "Check lecturer_sign_ins permissions."));
+  }
 }
 
 /* =========================================
@@ -1195,7 +1220,7 @@ function renderDashboard() {
                     <td>${formatDate(log.date)} · <strong>${escapeHTML(log.time || "")}</strong></td>
                     <td><strong>${escapeHTML(log._ownerName || log._ownerStaffId)}</strong> <small style="color:#6c7a93">(${escapeHTML(log._ownerStaffId)})</small></td>
                     <td>${escapeHTML(log.className)}${log.classCode ? ` (${escapeHTML(log.classCode)})` : ""}</td>
-                    <td>${escapeHTML(log.topic || "Lecture Session")}</td>
+                    <td>${escapeHTML(log.topic || "Lecture Session")}${log.venue ? ` · ${escapeHTML(log.venue)}` : ""}</td>
                     <td><span class="status-pill status-Present">${escapeHTML(log.status || "Signed In · Teaching")}</span></td>
                   </tr>
                 `).join("")
@@ -1752,6 +1777,32 @@ async function refreshCloudClassData(showErrors = false) {
       data.attendance = data.attendance.filter(record => !previousClassIds.has(record.classId));
     }
 
+    const { data: cloudTeachingLogs, error: teachingLogError } = await supabaseClient
+      .from("lecturer_sign_ins")
+      .select("id, lecturer_id, lecturer_name, staff_id, class_id, class_name, class_code, topic, venue, signed_in_at, signed_out_at, status")
+      .order("signed_in_at", { ascending: false })
+      .limit(500);
+    if (teachingLogError) throw teachingLogError;
+    data.teachingLogs = (cloudTeachingLogs || []).map(log => {
+      const signedAt = new Date(log.signed_in_at);
+      return {
+        id: log.id,
+        classId: log.class_id,
+        className: log.class_name,
+        classCode: log.class_code || "",
+        date: log.signed_in_at.slice(0, 10),
+        time: signedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        topic: log.topic || "",
+        venue: log.venue || "",
+        status: log.status || "Signed In · Teaching",
+        timestamp: log.signed_in_at,
+        signOutTime: log.signed_out_at ? new Date(log.signed_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+        _ownerStaffId: log.staff_id || log.lecturer_id,
+        _ownerName: log.lecturer_name || "Lecturer",
+        _cloudRecord: true
+      };
+    });
+
     saveData();
     setCloudStatus(true, "Synced with Supabase");
     populateClassSelects();
@@ -1795,6 +1846,16 @@ async function endTeachingClass(classId) {
   log.endTime = log.signOutTime;
   log.endedAt = signedOutAt.toISOString();
 
+  if (log._cloudRecord && log.id) {
+    const { error } = await supabaseClient.from("lecturer_sign_ins")
+      .update({ signed_out_at: signedOutAt.toISOString(), status: log.status })
+      .eq("id", log.id)
+      .eq("lecturer_id", currentLecturer.id);
+    if (error) {
+      console.error("Could not close lecturer sign-in audit record:", error);
+      toast("Lecture ended locally, but the audit sign-out could not sync: " + error.message);
+    }
+  }
   if (activeQrSession?.classId === classId) await stopQrSession(true);
   saveData();
   renderClasses();
@@ -1922,7 +1983,7 @@ async function handleClassActions(event) {
   const editButton = event.target.closest("[data-edit-class]");
   const deleteButton = event.target.closest("[data-delete-class]");
 
-  if (teachButton) promptLecturerClassSignIn(teachButton.dataset.teachClass);
+  if (teachButton) await promptLecturerClassSignIn(teachButton.dataset.teachClass);
   const endTeachButton = event.target.closest("[data-end-teach-class]");
   if (endTeachButton) endTeachingClass(endTeachButton.dataset.endTeachClass);
   if (enrollButton) openEnrollModal(enrollButton.dataset.enrollClass);
@@ -1975,7 +2036,7 @@ async function startQrSession() {
     if (!data.students.some(student => student.classId === classId)) {
       toast("No students are registered yet. Share the Student Registration QR first."); return;
     }
-    recordLecturerTeachingSignIn(classId, "Live QR Attendance Session", true);
+    await recordLecturerTeachingSignIn(classId, "Live QR Attendance Session", "", true);
     renderRegister();
     // Finalize any earlier live session before opening a replacement QR.
     const { data: staleSessions, error: staleSessionReadError } = await supabaseClient
