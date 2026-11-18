@@ -319,6 +319,7 @@
                     <th>ADMISSION NO.</th>
                     <th>CLASS</th>
                     <th>PHONE</th>
+                    <th>LOGIN EMAIL / ACCOUNT</th>
                     <th>ATTENDANCE %</th>
                     <th>ACTIONS</th>
                   </tr>
@@ -624,6 +625,20 @@
               <table>
                 <thead><tr><th>LECTURER</th><th>EMAIL</th><th>DEPARTMENT</th><th>STATUS</th><th>ACTION</th></tr></thead>
                 <tbody id="adminAccountsTable"><tr><td colspan="5" class="table-empty">Loading accounts...</td></tr></tbody>
+              </table>
+            </div>
+            <h3 style="margin-top:24px;">Student identity &amp; enrollment</h3>
+            <p class="muted">Monitor student account linking. Students must have a lecturer-created roster record and a verified email matching that record before they can check in.</p>
+            <div class="stats-grid enrollment-metrics">
+              <article class="stat-card"><div class="stat-top"><span>Total roster records</span></div><strong id="enrollmentTotal">0</strong></article>
+              <article class="stat-card"><div class="stat-top"><span>Accounts linked</span></div><strong id="enrollmentLinked">0</strong></article>
+              <article class="stat-card"><div class="stat-top"><span>Awaiting account link</span></div><strong id="enrollmentUnlinked">0</strong></article>
+              <article class="stat-card"><div class="stat-top"><span>Missing email</span></div><strong id="enrollmentMissingEmail">0</strong></article>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>STUDENT</th><th>ADMISSION NO.</th><th>CLASS</th><th>LOGIN EMAIL</th><th>ISSUE</th><th>ACTION</th></tr></thead>
+                <tbody id="adminEnrollmentAttentionTable"><tr><td colspan="6" class="table-empty">Loading student enrollment status...</td></tr></tbody>
               </table>
             </div>
             <h3 style="margin-top:24px;">Security &amp; audit log</h3>
