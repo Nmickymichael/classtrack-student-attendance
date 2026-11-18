@@ -4,7 +4,7 @@
 create table if not exists public.user_roles (
   user_id uuid primary key references auth.users(id) on delete cascade,
   role text not null default 'lecturer' check (role in ('admin','lecturer','student')),
-  account_status text not null default 'active' check (account_status in ('active','suspended')),
+  account_status text not null default 'pending' check (account_status in ('pending','active','suspended')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -28,7 +28,7 @@ begin
     else 'lecturer'
   end;
   insert into public.user_roles(user_id, role, account_status)
-  values (new.id, v_role, 'active')
+  values (new.id, v_role, case when v_role = 'student' then 'active' else 'pending' end)
   on conflict (user_id) do nothing;
   return new;
 end;
@@ -104,6 +104,11 @@ on public.user_roles for select to authenticated
 using (user_id = (select auth.uid()) or (select public.classtrack_is_admin()));
 -- No authenticated INSERT/UPDATE/DELETE policy is created for user_roles.
 -- Role assignment is restricted to trusted SQL/service-role operations.
+
+alter table public.classes enable row level security;
+alter table public.students enable row level security;
+alter table public.attendance enable row level security;
+alter table public.attendance_sessions enable row level security;
 
 -- Restrictive account-status guards ensure a suspended account cannot continue
 -- using an old JWT/session through the Data API.
