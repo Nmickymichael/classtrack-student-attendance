@@ -1284,6 +1284,10 @@ function renderStudents() {
     ? students.map(student => {
         const initials = student.name.split(/\s+/).map(p => p[0]).slice(0, 2).join("").toUpperCase();
         const stats = getStudentAttendanceStats(student.id);
+        const accountLinked = Boolean(student.userId);
+        const enrollmentStatus = accountLinked
+          ? '<span class="enrollment-pill linked">Account linked</span>'
+          : '<span class="enrollment-pill pending">Awaiting account</span>';
         let rateHTML = `<span class="rate-pill rate-neutral">No sessions</span>`;
         if (stats.total > 0) {
           const cls = stats.rate >= 75 ? "rate-good" : "rate-low";
@@ -1301,6 +1305,7 @@ function renderStudents() {
             <td>${escapeHTML(student.admission)}</td>
             <td>${escapeHTML(getClassName(student.classId))}</td>
             <td>${escapeHTML(student.phone || "—")}</td>
+            <td><div>${escapeHTML(student.email || "Email missing")}</div>${enrollmentStatus}</td>
             <td>${rateHTML}</td>
             <td>
               <button class="action-btn" data-edit-student="${escapeHTML(student.id)}">Edit</button>
@@ -1587,10 +1592,11 @@ async function saveStudentToCloud(student) {
     phone: student.phone || "",
     email: student.email ? student.email.trim().toLowerCase() : null
   };
+  if (student.userId) payload.user_id = student.userId;
   const { data: savedStudent, error } = await supabaseClient
     .from("students")
     .upsert(payload, { onConflict: "id" })
-    .select("id, class_id, full_name, admission_number, phone, email, created_at")
+    .select("id, class_id, full_name, admission_number, phone, email, user_id, created_at")
     .single();
   if (error) throw error;
   return {
@@ -1600,6 +1606,7 @@ async function saveStudentToCloud(student) {
     admission: savedStudent.admission_number,
     phone: savedStudent.phone || "",
     email: savedStudent.email || "",
+    userId: savedStudent.user_id || null,
     createdDate: savedStudent.created_at ? savedStudent.created_at.slice(0, 10) : today(),
     _cloudRecord: true,
     _ownerStaffId: currentLecturer.staffId
@@ -1718,7 +1725,7 @@ async function refreshCloudClassData(showErrors = false) {
     if (classIds.length) {
       const { data: cloudStudents, error: studentError } = await supabaseClient
         .from("students")
-        .select("id, class_id, full_name, admission_number, phone, email, created_at")
+        .select("id, class_id, full_name, admission_number, phone, email, user_id, created_at")
         .in("class_id", classIds);
       if (studentError) throw studentError;
 
@@ -1729,6 +1736,7 @@ async function refreshCloudClassData(showErrors = false) {
         admission: student.admission_number,
         phone: student.phone || "",
         email: student.email || "",
+        userId: student.user_id || null,
         createdDate: student.created_at ? student.created_at.slice(0, 10) : today(),
         _cloudRecord: true,
         _ownerStaffId: adminMode ? ownerByClassId.get(student.class_id) : currentLecturer.staffId,
@@ -2712,15 +2720,39 @@ async function loadAdminSecurityPanel() {
   if (auditBody) auditBody.innerHTML = '<tr><td colspan="5" class="table-empty">Loading audit records...</td></tr>';
 
   try {
-    const [{ data: accounts, error: accountError }, { data: logs, error: auditError }] = await Promise.all([
+    const [
+      { data: accounts, error: accountError },
+      { data: logs, error: auditError },
+      { data: enrollmentReport, error: enrollmentError }
+    ] = await Promise.all([
       supabaseClient.rpc("admin_list_accounts"),
       supabaseClient.from("audit_logs")
         .select("id, actor_id, action, table_name, record_id, created_at")
         .order("created_at", { ascending: false })
-        .limit(50)
+        .limit(50),
+      supabaseClient.rpc("admin_student_enrollment_report")
     ]);
     if (accountError) throw accountError;
     if (auditError) throw auditError;
+    if (enrollmentError) throw enrollmentError;
+
+    const report = enrollmentReport || {};
+    $("enrollmentTotal").textContent = Number(report.total || 0).toLocaleString();
+    $("enrollmentLinked").textContent = Number(report.linked || 0).toLocaleString();
+    $("enrollmentUnlinked").textContent = Number(report.unlinked || 0).toLocaleString();
+    $("enrollmentMissingEmail").textContent = Number(report.missing_email || 0).toLocaleString();
+    const attentionBody = $("adminEnrollmentAttentionTable");
+    const attentionRows = Array.isArray(report.attention) ? report.attention : [];
+    if (attentionBody) {
+      attentionBody.innerHTML = attentionRows.length ? attentionRows.map(item => `<tr>
+        <td>${escapeHTML(item.full_name || "Student")}</td>
+        <td>${escapeHTML(item.admission_number || "—")}</td>
+        <td>${escapeHTML(item.class_name || "—")}</td>
+        <td>${escapeHTML(item.email || "Missing")}</td>
+        <td><span class="enrollment-pill pending">${escapeHTML(item.issue || "Needs review")}</span></td>
+        <td><button class="action-btn" data-edit-student="${escapeHTML(item.student_id)}">Open record</button></td>
+      </tr>`).join("") : '<tr><td colspan="6" class="table-empty">All student records have an email and linked account.</td></tr>';
+    }
 
     const accountList = accounts || [];
     const byId = new Map(accountList.map(account => [account.user_id, account]));
@@ -2917,6 +2949,7 @@ function bindEvents() {
   $("saveSettingsBtn").addEventListener("click", saveSettings);
   $("refreshAdminPanelBtn")?.addEventListener("click", loadAdminSecurityPanel);
   $("adminAccountsTable")?.addEventListener("click", handleAdminSecurityActions);
+  $("adminEnrollmentAttentionTable")?.addEventListener("click", handleStudentActions);
   $("clearDataBtn").addEventListener("click", clearAllData);
 }
 
