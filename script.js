@@ -1079,11 +1079,11 @@ function renderDashboard() {
               ? summaries.map(l => {
                   let statusPill = `<span class="rate-pill rate-neutral">No Classes Yet</span>`;
                   if (l.signedInToday) {
-                    statusPill = `<span class="rate-pill rate-good">✓ Teaching Today</span>`;
-                  } else if (l.lessonsSignedIn > 0) {
-                    statusPill = `<span class="rate-pill rate-good">✓ Active (${l.lessonsSignedIn})</span>`;
+                    statusPill = `<span class="rate-pill rate-good"><i class="live-dot"></i> Teaching now</span>`;
+                  } else if (l.completedToday) {
+                    statusPill = `<span class="rate-pill rate-neutral">✓ Sessions completed today</span>`;
                   } else if (l.classCount > 0) {
-                    statusPill = `<span class="rate-pill rate-low">Pending Sign-In</span>`;
+                    statusPill = `<span class="rate-pill rate-low">Not signed in today</span>`;
                   }
 
                   const assistBtn = l.isAdmin
@@ -1117,19 +1117,23 @@ function renderDashboard() {
       btn.addEventListener("click", () => adminResetLecturerPin(btn.dataset.resetLecPin));
     });
 
-    const sortedLogs = [...(data.teachingLogs || [])]
-      .sort((a, b) => (b.timestamp || b.date).localeCompare(a.timestamp || a.date))
-      .slice(0, 12);
+    const allTeachingLogs = data.teachingLogs || [];
+    const todayLogs = allTeachingLogs.filter(log => log.date === today());
+    const activeTeachingLogs = todayLogs.filter(log => log.status === "Signed In · Teaching");
+    const completedTeachingLogs = todayLogs.filter(log => log.status !== "Signed In · Teaching");
+    const sortedLogs = [...allTeachingLogs].sort((a,b) => (b.timestamp || b.date).localeCompare(a.timestamp || a.date)).slice(0,25);
 
     adminTeachingLogPanel.style.display = "block";
     adminTeachingLogPanel.innerHTML = `
       <div class="panel-header">
-        <div>
-          <h3>Lecturer Class Sign-In Log (Live Teaching Audit)</h3>
-          <p>Chronological record of lecturers entering class and signing in to teach specific units</p>
-        </div>
-        <span class="date-chip">${(data.teachingLogs || []).length} Total Sign-Ins</span>
+        <div><h3>Lecturer Class Sign-In Log (Live Teaching Audit)</h3><p>Supabase audit records, refreshed live and every 10 seconds</p></div>
+        <span class="date-chip">${allTeachingLogs.length} Total Sign-Ins</span>
       </div>
+      <div class="teaching-live-summary">
+        <div><span class="live-dot"></span><strong>${activeTeachingLogs.length}</strong><small>Teaching now</small></div>
+        <div><strong>${completedTeachingLogs.length}</strong><small>Sessions completed today</small></div>
+        <div><strong>${todayLogs.length}</strong><small>Sign-ins today</small></div>
+      </div>`
       <div class="table-wrap">
         <table>
           <thead>
@@ -1138,7 +1142,8 @@ function renderDashboard() {
               <th>Lecturer</th>
               <th>Unit / Class Taught</th>
               <th>Lesson Topic / Venue</th>
-              <th>Verification</th>
+              <th>Live Status</th>
+              <th>Signed Out</th>
             </tr>
           </thead>
           <tbody>
@@ -1149,10 +1154,11 @@ function renderDashboard() {
                     <td><strong>${escapeHTML(log._ownerName || log._ownerStaffId)}</strong> <small style="color:#6c7a93">(${escapeHTML(log._ownerStaffId)})</small></td>
                     <td>${escapeHTML(log.className)}${log.classCode ? ` (${escapeHTML(log.classCode)})` : ""}</td>
                     <td>${escapeHTML(log.topic || "Lecture Session")}${log.venue ? ` · ${escapeHTML(log.venue)}` : ""}</td>
-                    <td><span class="status-pill status-Present">${escapeHTML(log.status || "Signed In · Teaching")}</span></td>
+                    <td>${log.status === "Signed In · Teaching" ? '<span class="rate-pill rate-good"><i class="live-dot"></i> Teaching now</span>' : '<span class="rate-pill rate-neutral">Completed</span>'}</td>
+                    <td>${escapeHTML(log.signOutTime || "—")}</td>
                   </tr>
                 `).join("")
-              : `<tr><td colspan="5" class="table-empty">No lecturer class sign-ins recorded yet.</td></tr>`
+              : `<tr><td colspan="6" class="table-empty">No lecturer class sign-ins recorded yet.</td></tr>`
             }
           </tbody>
         </table>
