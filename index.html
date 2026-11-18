@@ -263,6 +263,19 @@
             </article>
           </div>
 
+          <section class="panel admin-reporting-hub" id="adminReportingHub" hidden>
+            <div class="panel-heading">
+              <div><h2>Institutional Reporting &amp; Export Hub</h2><p class="muted">Official reports generated from the Supabase institutional records</p></div>
+              <span class="date-chip"><strong id="adminMonthlyRecordCount">0</strong> monthly records</span>
+            </div>
+            <div class="admin-export-actions">
+              <button type="button" class="btn btn-primary" id="adminExportMonthlyBtn">↓ Export monthly attendance summary</button>
+              <button type="button" class="btn btn-light" id="adminExportRiskBtn">↓ Export low-attendance alerts (&lt;75%) · <span id="adminRiskExportCount">0</span></button>
+              <button type="button" class="btn btn-light" id="adminPrintMonthlyBtn">▤ Print official monthly report</button>
+            </div>
+            <p class="muted admin-report-note">Attendance alerts identify students whose recorded attendance is below 75%.</p>
+          </section>
+
           <article class="panel recent-panel">
             <div class="panel-heading">
               <div>
