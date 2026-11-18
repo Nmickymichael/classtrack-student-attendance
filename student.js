@@ -29,8 +29,8 @@ function showStudentPanel(panel) {
 function setStudentHeading() {
   byId("studentTitle").textContent = studentMode === "checkin" ? "Lecture check-in" : "Class registration";
   byId("studentSubtitle").textContent = studentMode === "checkin"
-    ? "Sign in with your student account to record attendance."
-    : "Create your student account once, then register for this class.";
+    ? "Sign in with your verified student account to record attendance."
+    : "Create your account, verify your email, then link it to the class record created by your lecturer.";
 }
 function setSignedInUI(user) {
   activeStudentUser = user;
