@@ -1396,6 +1396,9 @@ function renderStudents() {
         const enrollmentStatus = accountLinked
           ? '<span class="enrollment-pill linked">Account linked</span>'
           : '<span class="enrollment-pill pending">Awaiting account</span>';
+        const inviteAction = !accountLinked && student.email
+          ? `<button class="action-btn enroll" data-invite-student="${escapeHTML(student.id)}">Invite</button>`
+          : "";
         let rateHTML = `<span class="rate-pill rate-neutral">No sessions</span>`;
         if (stats.total > 0) {
           const cls = stats.rate >= 75 ? "rate-good" : "rate-low";
@@ -1417,6 +1420,7 @@ function renderStudents() {
             <td>${rateHTML}</td>
             <td>
               <button class="action-btn" data-edit-student="${escapeHTML(student.id)}">Edit</button>
+              ${inviteAction}
               <button class="action-btn delete" data-delete-student="${escapeHTML(student.id)}">Delete</button>
             </td>
           </tr>
@@ -1510,8 +1514,30 @@ async function saveStudent(event) {
 async function handleStudentActions(event) {
   const editButton = event.target.closest("[data-edit-student]");
   const deleteButton = event.target.closest("[data-delete-student]");
+  const inviteButton = event.target.closest("[data-invite-student]");
 
   if (editButton) openStudent(editButton.dataset.editStudent);
+  if (inviteButton) {
+    const student = data.students.find(item => item.id === inviteButton.dataset.inviteStudent);
+    if (!student?.email) {
+      toast("Add the student's login email before sending an invitation.");
+      return;
+    }
+    inviteButton.disabled = true;
+    inviteButton.textContent = "Sending...";
+    try {
+      const result = await sendStudentInvitation(student.id);
+      toast(result.message || "Student invitation sent.");
+      await refreshCloudClassData();
+      renderStudents();
+      if (isAdminUser(currentLecturer)) await loadAdminSecurityPanel();
+    } catch (error) {
+      console.error("Student invitation failed:", error);
+      toast(error.message || "Could not send the student invitation.");
+      inviteButton.disabled = false;
+      inviteButton.textContent = "Invite";
+    }
+  }
 
   if (deleteButton) {
     const id = deleteButton.dataset.deleteStudent;
@@ -2820,6 +2846,43 @@ function restoreData(file) {
 /* =========================================
    SECURE ADMIN ACCOUNT DIRECTORY & AUDIT REVIEW
    ========================================= */
+
+async function sendStudentInvitation(studentId) {
+  const { data: result, error } = await supabaseClient.functions.invoke("invite-student", {
+    body: { student_id: studentId }
+  });
+  if (error) throw error;
+  if (result?.error) throw new Error(result.error);
+  return result || {};
+}
+
+async function invitePendingStudents() {
+  if (!isAdminUser(currentLecturer)) return;
+  const button = $("inviteAllPendingStudents");
+  const pending = data.students.filter(student => !student.userId && student.email).slice(0, 50);
+  if (!pending.length) {
+    toast("No students with a login email are waiting for an invitation.");
+    return;
+  }
+  if (!confirm(`Send student account invitations to ${pending.length} eligible student(s)?`)) return;
+  if (button) { button.disabled = true; button.textContent = "Sending invitations..."; }
+  let sent = 0;
+  const failures = [];
+  for (const student of pending) {
+    try {
+      await sendStudentInvitation(student.id);
+      sent++;
+    } catch (error) {
+      failures.push(student.name + ": " + (error.message || "Invitation failed."));
+    }
+  }
+  if (button) { button.disabled = false; button.textContent = "Invite all eligible students"; }
+  toast(sent + " invitation(s) sent." + (failures.length ? " " + failures.length + " need attention." : ""));
+  await refreshCloudClassData();
+  await loadAdminSecurityPanel();
+  if (failures.length) alert("Invitations sent: " + sent + "\n\nPlease review these records:\n" + failures.slice(0, 15).join("\n"));
+}
+
 async function loadAdminSecurityPanel() {
   if (!isAdminUser(currentLecturer)) return;
   const accountsBody = $("adminAccountsTable");
@@ -2849,6 +2912,7 @@ async function loadAdminSecurityPanel() {
       $("enrollmentLinked").textContent = Number(report.linked || 0).toLocaleString();
       $("enrollmentUnlinked").textContent = Number(report.unlinked || 0).toLocaleString();
       $("enrollmentMissingEmail").textContent = Number(report.missing_email || 0).toLocaleString();
+      $("enrollmentAwaitingVerification").textContent = Number(report.awaiting_verification || 0).toLocaleString();
       const attentionBody = $("adminEnrollmentAttentionTable");
       const attentionRows = Array.isArray(report.attention) ? report.attention : [];
       if (attentionBody) {
@@ -2858,7 +2922,10 @@ async function loadAdminSecurityPanel() {
           <td>${escapeHTML(item.class_name || "—")}</td>
           <td>${escapeHTML(item.email || "Missing")}</td>
           <td><span class="enrollment-pill pending">${escapeHTML(item.issue || "Needs review")}</span></td>
-          <td><button class="action-btn" data-edit-student="${escapeHTML(item.student_id)}">Open record</button></td>
+          <td>
+          ${item.email ? `<button class="action-btn enroll" data-invite-student="${escapeHTML(item.student_id)}">Invite</button>` : ""}
+          <button class="action-btn" data-edit-student="${escapeHTML(item.student_id)}">Edit</button>
+        </td>
         </tr>`).join("") : '<tr><td colspan="6" class="table-empty">All student records have an email and linked account.</td></tr>';
       }
     } else {
@@ -3061,6 +3128,7 @@ function bindEvents() {
   });
   $("saveSettingsBtn").addEventListener("click", saveSettings);
   $("refreshAdminPanelBtn")?.addEventListener("click", loadAdminSecurityPanel);
+  $("inviteAllPendingStudents")?.addEventListener("click", invitePendingStudents);
   $("adminAccountsTable")?.addEventListener("click", handleAdminSecurityActions);
   $("adminEnrollmentAttentionTable")?.addEventListener("click", handleStudentActions);
   $("clearDataBtn").addEventListener("click", clearAllData);
