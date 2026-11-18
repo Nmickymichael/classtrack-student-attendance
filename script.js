@@ -79,6 +79,7 @@ let currentReport = [];
 let activeQrSession = null;
 let sessionTimerInterval = null;
 let cloudRefreshInterval = null;
+let teachingSignInChannel = null;
 let portalTimerInterval = null;
 
 /* =========================================
@@ -1819,9 +1820,31 @@ async function refreshCloudClassData(showErrors = false) {
     if (showErrors) toast("Cloud refresh failed: " + (error.message || "Check Supabase RLS policies and table columns."));
   }
 }
+function subscribeToTeachingSignIns() {
+  if (teachingSignInChannel) {
+    supabaseClient.removeChannel(teachingSignInChannel);
+    teachingSignInChannel = null;
+  }
+  teachingSignInChannel = supabaseClient
+    .channel("classtrack-lecturer-sign-ins-live")
+    .on("postgres_changes", {
+      event: "*",
+      schema: "public",
+      table: "lecturer_sign_ins"
+    }, () => {
+      if (document.visibilityState === "visible") refreshCloudClassData();
+    })
+    .subscribe(status => {
+      if (status === "CHANNEL_ERROR") {
+        console.warn("Live lecturer sign-in updates unavailable; the 10-second cloud refresh remains active.");
+      }
+    });
+}
+
 function startCloudRefresh() {
   clearInterval(cloudRefreshInterval);
   refreshCloudClassData();
+  subscribeToTeachingSignIns();
   cloudRefreshInterval = setInterval(() => {
     if (document.visibilityState === "visible") refreshCloudClassData();
   }, 10000);
