@@ -1977,12 +1977,20 @@ async function startQrSession() {
     }
     recordLecturerTeachingSignIn(classId, "Live QR Attendance Session", true);
     renderRegister();
-    // Invalidate every earlier QR session for this class before issuing a new token.
-    const { error: staleSessionError } = await supabaseClient.from("attendance_sessions")
-      .update({ is_active: false })
+    // Finalize any earlier live session before opening a replacement QR.
+    const { data: staleSessions, error: staleSessionReadError } = await supabaseClient
+      .from("attendance_sessions")
+      .select("id")
       .eq("class_id", cloudClass.id)
-      .eq("is_active", true);
-    if (staleSessionError) throw staleSessionError;
+      .eq("is_active", true)
+      .eq("is_finalized", false);
+    if (staleSessionReadError) throw staleSessionReadError;
+    for (const staleSession of (staleSessions || [])) {
+      const { error: staleFinalizeError } = await supabaseClient.rpc("finalize_attendance_session", {
+        p_session_id: staleSession.id
+      });
+      if (staleFinalizeError) throw staleFinalizeError;
+    }
 
     const expiry = Date.now() + minutes * 60 * 1000;
     const { data: cloudSession, error } = await supabaseClient.from("attendance_sessions").insert({
