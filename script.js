@@ -153,79 +153,17 @@ function readRawWorkspaceByStaffId(staffId) {
 }
 
 function loadGlobalAdminView(adminUser) {
-  const lecturers = getLecturers();
-  const adminOwn = readRawWorkspaceByStaffId("admin");
-  const todayStr = today();
-
-  const combined = {
-    students: [],
+  // Global Admin institutional records are loaded exclusively from Supabase.
+  // Never merge browser-local lecturer workspaces into the institutional view.
+  return {
+    ...emptyWorkspace(adminUser),
     classes: [],
+    students: [],
     attendance: [],
     teachingLogs: [],
     lecturersSummary: [],
-    settings: {
-      ...emptyWorkspace(adminUser).settings,
-      ...(adminOwn.settings || {}),
-      pin: adminUser.pin
-    }
+    settings: { ...emptyWorkspace(adminUser).settings, pin: adminUser.pin }
   };
-
-  lecturers.forEach(lec => {
-    const ws = readRawWorkspaceByStaffId(lec.staffId);
-    const lecLabel = isAdminUser(lec) ? "Admin Direct" : `${lec.name} (${lec.staffId})`;
-
-    const lecClasses = (ws.classes || []).map(c => ({
-      ...c,
-      _ownerStaffId: lec.staffId,
-      _ownerName: lecLabel,
-      displayName: isAdminUser(lec) ? c.name : `${c.name} — [${lec.name}]`
-    }));
-
-    const lecStudents = (ws.students || []).map(s => ({
-      ...s,
-      _ownerStaffId: lec.staffId,
-      _ownerName: lecLabel
-    }));
-
-    const lecAttendance = (ws.attendance || []).map(a => ({
-      ...a,
-      _ownerStaffId: lec.staffId,
-      _ownerName: lecLabel
-    }));
-
-    const lecLogs = (ws.teachingLogs || []).map(log => ({
-      ...log,
-      _ownerStaffId: lec.staffId,
-      _ownerName: lec.name,
-      _ownerStaffLabel: lecLabel
-    }));
-
-    combined.classes.push(...lecClasses);
-    combined.students.push(...lecStudents);
-    combined.attendance.push(...lecAttendance);
-    combined.teachingLogs.push(...lecLogs);
-
-    if (!isAdminUser(lec) || lecClasses.length > 0 || lecStudents.length > 0 || lecLogs.length > 0) {
-      const totalRecs = lecAttendance.length;
-      const presentRecs = lecAttendance.filter(r => r.status === "Present" || r.status === "Late").length;
-      const rate = totalRecs ? Math.round((presentRecs / totalRecs) * 100) : null;
-      const signedInToday = lecLogs.some(l => l.date === todayStr);
-
-      combined.lecturersSummary.push({
-        name: lec.name,
-        staffId: lec.staffId,
-        department: lec.department || "—",
-        isAdmin: isAdminUser(lec),
-        classCount: lecClasses.length,
-        studentCount: lecStudents.length,
-        lessonsSignedIn: lecLogs.length,
-        signedInToday,
-        attendanceRate: rate
-      });
-    }
-  });
-
-  return combined;
 }
 
 function loadWorkspace(lecturer) {
@@ -281,28 +219,7 @@ function saveData() {
   if (!currentLecturer) return false;
 
   if (isAdminUser(currentLecturer)) {
-    const lecturers = getLecturers();
-    lecturers.forEach(lec => {
-      const staffId = lec.staffId;
-      const existing = readRawWorkspaceByStaffId(staffId);
-      const updated = {
-        ...existing,
-        classes: data.classes
-          .filter(c => (c._ownerStaffId || "admin").toLowerCase() === staffId.toLowerCase())
-          .map(({ _ownerStaffId, _ownerName, displayName, ...clean }) => clean),
-        students: data.students
-          .filter(s => (s._ownerStaffId || "admin").toLowerCase() === staffId.toLowerCase())
-          .map(({ _ownerStaffId, _ownerName, ...clean }) => clean),
-        attendance: data.attendance
-          .filter(a => (a._ownerStaffId || "admin").toLowerCase() === staffId.toLowerCase())
-          .map(({ _ownerStaffId, _ownerName, ...clean }) => clean),
-        teachingLogs: data.teachingLogs
-          .filter(l => (l._ownerStaffId || "admin").toLowerCase() === staffId.toLowerCase())
-          .map(({ _ownerStaffId, _ownerName, _ownerStaffLabel, ...clean }) => clean),
-        settings: isAdminUser(lec) ? data.settings : existing.settings
-      };
-      localStorage.setItem(getWorkspaceKey(staffId), JSON.stringify(updated));
-    });
+    // Institutional records remain in Supabase; never persist them to localStorage.
     return true;
   }
 
@@ -869,8 +786,13 @@ function unlockApp(user) {
   $("institutionName").value = data.settings.institution || "";
   $("departmentName").value = data.settings.department || user.department || "";
   $("settingsPin").value = user.pin || data.settings.pin || "";
+  const adminMode = isAdminUser(user);
   const adminPanel = $("adminSecurityPanel");
-  if (adminPanel) adminPanel.style.display = isAdminUser(user) ? "block" : "none";
+  if (adminPanel) adminPanel.style.display = adminMode ? "block" : "none";
+  const attendanceNav = document.querySelector('.nav-link[data-view="attendance"]');
+  if (attendanceNav) attendanceNav.hidden = adminMode;
+  const attendanceView = $("view-attendance");
+  if (attendanceView) attendanceView.hidden = adminMode;
 
   $("loginScreen").style.display = "none";
   $("appShell").style.display = "block";
@@ -977,8 +899,9 @@ function toast(message) {
    ========================================= */
 
 function showView(name) {
-  if (isAdminUser(currentLecturer)) {
-    data = loadGlobalAdminView(currentLecturer);
+  if (isAdminUser(currentLecturer) && name === "attendance") {
+    toast("Live attendance sessions are available to lecturers only.");
+    name = "dashboard";
   }
 
   document.querySelectorAll(".view").forEach(view => {
@@ -1611,9 +1534,9 @@ function renderClasses() {
               <div class="class-card-top">
                 <span class="class-symbol">▤</span>
                 <div class="class-actions" style="flex-wrap:wrap;justify-content:flex-end;">
-                  ${signedInToday
+                  ${adminMode ? '<button class="action-btn" data-view-class-roster="'+escapeHTML(classItem.id)+'">View roster</button>' : (signedInToday
                     ? `<span class="action-btn" style="background:#e9f8f2;color:#11835c;border-color:#bfe8d8;font-weight:600;">✓ Signed In</span><button class="action-btn delete" data-end-teach-class="${escapeHTML(classItem.id)}">Sign Out</button>`
-                    : `<button class="action-btn" style="background:#e9f8f2;color:#11835c;border-color:#bfe8d8;font-weight:600;" data-teach-class="${escapeHTML(classItem.id)}">✓ Sign In to Teach</button>`}
+                    : `<button class="action-btn" style="background:#e9f8f2;color:#11835c;border-color:#bfe8d8;font-weight:600;" data-teach-class="${escapeHTML(classItem.id)}">✓ Sign In to Teach</button>`)}
                   <button class="action-btn enroll" data-enroll-class="${escapeHTML(classItem.id)}">⊞ Student Registration QR</button>
                   <button class="action-btn" data-edit-class="${escapeHTML(classItem.id)}">Edit</button>
                   <button class="action-btn delete" data-delete-class="${escapeHTML(classItem.id)}">Delete</button>
@@ -1820,6 +1743,9 @@ async function refreshCloudClassData(showErrors = false) {
   }
 
   try {
+    // Rebuild the administrator's workspace from Supabase only on every refresh.
+    if (isAdminUser(currentLecturer)) data = loadGlobalAdminView(currentLecturer);
+
     // Classes are the starting point. Fetch them by the authenticated lecturer's
     // Supabase user ID so a fresh browser can rebuild its workspace from cloud data.
     const adminMode = isAdminUser(currentLecturer);
@@ -1942,12 +1868,13 @@ async function refreshCloudClassData(showErrors = false) {
     if (teachingLogError) throw teachingLogError;
     data.teachingLogs = (cloudTeachingLogs || []).map(log => {
       const signedAt = new Date(log.signed_in_at);
+      const localDate = `${signedAt.getFullYear()}-${String(signedAt.getMonth() + 1).padStart(2, "0")}-${String(signedAt.getDate()).padStart(2, "0")}`;
       return {
         id: log.id,
         classId: log.class_id,
         className: log.class_name,
         classCode: log.class_code || "",
-        date: log.signed_in_at.slice(0, 10),
+        date: localDate,
         time: signedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         topic: log.topic || "",
         venue: log.venue || "",
@@ -1959,6 +1886,31 @@ async function refreshCloudClassData(showErrors = false) {
         _cloudRecord: true
       };
     });
+
+    if (adminMode) {
+      const todayKey = today();
+      data.lecturersSummary = ownerAccounts.filter(account => account.role === "lecturer").map(account => {
+        const lecturerClasses = data.classes.filter(cls => cls._ownerId === account.user_id);
+        const classIds = new Set(lecturerClasses.map(cls => cls.id));
+        const lecturerLogs = data.teachingLogs.filter(log => log._ownerStaffId === account.user_id);
+        const lecturerAttendance = data.attendance.filter(record => classIds.has(record.classId));
+        const todaysLogs = lecturerLogs.filter(log => log.date === todayKey);
+        return {
+          name: account.full_name || account.email || "Lecturer",
+          staffId: account.staff_id || account.email || account.user_id.slice(0, 8),
+          department: account.department || "—",
+          isAdmin: false,
+          classCount: lecturerClasses.length,
+          studentCount: data.students.filter(student => classIds.has(student.classId)).length,
+          lessonsSignedIn: lecturerLogs.length,
+          signedInToday: todaysLogs.some(log => log.status === "Signed In · Teaching"),
+          completedToday: todaysLogs.some(log => log.status !== "Signed In · Teaching"),
+          attendanceRate: lecturerAttendance.length
+            ? Math.round((lecturerAttendance.filter(record => record.status === "Present" || record.status === "Late").length / lecturerAttendance.length) * 100)
+            : null
+        };
+      });
+    }
 
     saveData();
     setCloudStatus(true, "Synced with Supabase");
@@ -2157,6 +2109,14 @@ async function saveClass(event) {
   }
 }
 async function handleClassActions(event) {
+  if (isAdminUser(currentLecturer) && event.target.closest("[data-teach-class], [data-end-teach-class]")) {
+    toast("Teaching sign-in and sign-out are lecturer-only actions."); return;
+  }
+  const rosterButton = event.target.closest("[data-view-class-roster]");
+  if (rosterButton && isAdminUser(currentLecturer)) {
+    $("studentClassFilter").value = rosterButton.dataset.viewClassRoster;
+    showView("students"); renderStudents(); return;
+  }
   const teachButton = event.target.closest("[data-teach-class]");
   const enrollButton = event.target.closest("[data-enroll-class]");
   const editButton = event.target.closest("[data-edit-class]");
@@ -2202,6 +2162,9 @@ async function handleClassActions(event) {
 
 
 async function startQrSession() {
+  if (isAdminUser(currentLecturer)) {
+    toast("Live QR attendance sessions can only be started by lecturers."); return;
+  }
   const classId = $("attendanceClass").value, date = $("attendanceDate").value;
   const minutes = parseInt($("sessionDuration").value, 10) || 5;
   if (!classId || !date) { toast("Please select a Class and Date below first."); return; }
