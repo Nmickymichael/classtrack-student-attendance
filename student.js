@@ -106,8 +106,10 @@ async function submitStudentCheckin(event) {
     let friendlyMessage = rawMessage || "Could not record attendance.";
     if (normalizedError.includes("already linked") || normalizedError.includes("different student account")) {
       friendlyMessage = "This admission number is already linked to another student account.";
-    } else if (normalizedError.includes("not enrolled") || normalizedError.includes("not registered for this class") || normalizedError.includes("no matching student record")) {
-      friendlyMessage = "You are not enrolled in this class.";
+    } else if (normalizedError.includes("not enrolled") || normalizedError.includes("not registered for this class")) {
+      friendlyMessage = "This admission number is not enrolled in the class attached to this QR session. Ask the lecturer to verify the class roster.";
+    } else if (normalizedError.includes("no matching student record") || normalizedError.includes("no roster record")) {
+      friendlyMessage = "No roster entry matched this admission number in the class attached to this QR session. Ask the lecturer to verify the student's class assignment and registered email.";
     } else if (normalizedError.includes("admission number") && (normalizedError.includes("does not match") || normalizedError.includes("mismatch"))) {
       friendlyMessage = "The admission number entered does not match your student account.";
     }
