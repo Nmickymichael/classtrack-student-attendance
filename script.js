@@ -1394,7 +1394,9 @@ function renderStudents() {
         const stats = getStudentAttendanceStats(student.id);
         const accountLinked = Boolean(student.userId);
         const enrollmentStatus = accountLinked
-          ? '<span class="enrollment-pill linked">Account linked</span>'
+          ? (student.emailVerifiedAt
+              ? '<span class="enrollment-pill linked">Verified account</span>'
+              : '<span class="enrollment-pill pending">Verify invitation</span>')
           : '<span class="enrollment-pill pending">Awaiting account</span>';
         const inviteAction = !accountLinked && student.email
           ? `<button class="action-btn enroll" data-invite-student="${escapeHTML(student.id)}">Invite</button>`
@@ -1736,7 +1738,7 @@ async function saveStudentToCloud(student) {
   const { data: savedStudent, error } = await supabaseClient
     .from("students")
     .upsert(payload, { onConflict: "id" })
-    .select("id, class_id, full_name, admission_number, phone, email, user_id, created_at")
+    .select("id, class_id, full_name, admission_number, phone, email, user_id, email_verified_at, created_at")
     .single();
   if (error) throw error;
   return {
@@ -1747,6 +1749,7 @@ async function saveStudentToCloud(student) {
     phone: savedStudent.phone || "",
     email: savedStudent.email || "",
     userId: savedStudent.user_id || null,
+    emailVerifiedAt: savedStudent.email_verified_at || null,
     createdDate: savedStudent.created_at ? savedStudent.created_at.slice(0, 10) : today(),
     _cloudRecord: true,
     _ownerStaffId: currentLecturer.staffId
@@ -1865,7 +1868,7 @@ async function refreshCloudClassData(showErrors = false) {
     if (classIds.length) {
       const { data: cloudStudents, error: studentError } = await supabaseClient
         .from("students")
-        .select("id, class_id, full_name, admission_number, phone, email, user_id, created_at")
+        .select("id, class_id, full_name, admission_number, phone, email, user_id, email_verified_at, created_at")
         .in("class_id", classIds);
       if (studentError) throw studentError;
 
@@ -1877,6 +1880,7 @@ async function refreshCloudClassData(showErrors = false) {
         phone: student.phone || "",
         email: student.email || "",
         userId: student.user_id || null,
+        emailVerifiedAt: student.email_verified_at || null,
         createdDate: student.created_at ? student.created_at.slice(0, 10) : today(),
         _cloudRecord: true,
         _ownerStaffId: adminMode ? ownerByClassId.get(student.class_id) : currentLecturer.staffId,
